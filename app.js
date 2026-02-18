@@ -48,6 +48,7 @@ const STORAGE_URL_KEY    = "siged_csv_url";
 const STORAGE_FOTOS_KEY  = "siged_fotos";
 const STORAGE_GCLIENT_KEY = "siged_google_client_id";
 const DRIVE_ROOT          = "SIGED Fotos";
+const DEFAULT_CLIENT_ID   = "263672487463-bf0e1fn8k66tnvsfld7dtnmmd5ag6t46.apps.googleusercontent.com";
 let tokenClient = null;
 
 function sanitizeDoc(value) {
@@ -141,7 +142,7 @@ function limpiarSesion() {
 
 /* ── Google Drive / Auth ──────────────────────────── */
 function obtenerClientId() {
-  return localStorage.getItem(STORAGE_GCLIENT_KEY) ?? "";
+  return localStorage.getItem(STORAGE_GCLIENT_KEY) ?? DEFAULT_CLIENT_ID;
 }
 
 function inicializarGIS(clientId) {
