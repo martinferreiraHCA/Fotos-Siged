@@ -1,6 +1,20 @@
 const PHOTO_WIDTH = 100;
 const PHOTO_HEIGHT = 100;
 
+/* ── Toast notifications ──────────────────────────── */
+function toast(message, type = "info", duration = 3200) {
+  const container = document.getElementById("toast-container");
+  const icons = { success: "✓", error: "✕", info: "ℹ" };
+  const el = document.createElement("div");
+  el.className = `toast toast--${type}`;
+  el.innerHTML = `<span>${icons[type] ?? icons.info}</span><span>${message}</span>`;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("toast--out");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+  }, duration);
+}
+
 const state = {
   rows: [],
   groups: [],
@@ -13,13 +27,13 @@ const state = {
 };
 
 const helpText = {
-  "panel-info": "Muestra resumen del grupo: cuántos estudiantes hay, cuántos tienen foto y el progreso general.",
-  "ultima-foto": "Presenta una miniatura de la foto más reciente y el nombre/documento del estudiante asociado.",
-  "activar-camara": "Solicita permisos de cámara al navegador y habilita la vista previa en tiempo real.",
-  "cargar-csv": "Lee un CSV local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes.",
-  "seleccionar-grupo": "Filtra estudiantes por grupo y reinicia la vista para trabajar solo con ese grupo.",
-  "guardar-foto": "Captura el frame actual de la cámara, lo redimensiona a 100x100 y lo asocia al estudiante seleccionado.",
-  "comprimir": "Genera un ZIP descargable con las fotos del grupo actual para enviarlo o archivarlo."
+  "panel-info":        { title: "Información general",     body: "Muestra resumen del grupo: cuántos estudiantes hay, cuántos tienen foto y el progreso general." },
+  "ultima-foto":       { title: "Última foto tomada",      body: "Presenta una miniatura de la foto más reciente y el nombre/documento del estudiante asociado." },
+  "activar-camara":    { title: "Activar cámara",          body: "Solicita permisos de cámara al navegador y habilita la vista previa en tiempo real." },
+  "cargar-csv":        { title: "Cargar archivo CSV",      body: "Lee un CSV local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes." },
+  "seleccionar-grupo": { title: "Seleccionar grupo",       body: "Filtra estudiantes por grupo y reinicia la vista para trabajar solo con ese grupo." },
+  "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara, lo redimensiona a 100×100 px y lo asocia al estudiante seleccionado." },
+  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP descargable con las fotos del grupo actual para enviarlo o archivarlo." }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -130,8 +144,8 @@ function renderEstudiantes() {
 }
 
 function guardarFoto() {
-  if (!state.seleccion) return alert("Selecciona un estudiante.");
-  if (!state.stream) return alert("Activa la cámara primero.");
+  if (!state.seleccion) return toast("Selecciona un estudiante primero.", "error");
+  if (!state.stream) return toast("Activa la cámara primero.", "error");
   const video = $("preview");
   const canvas = $("captura");
   const ctx = canvas.getContext("2d");
@@ -157,6 +171,7 @@ function guardarFoto() {
   $("ultimo-estudiante").textContent = `${state.seleccion.Nombre} (${doc})`;
   renderEstudiantes();
   actualizarPendientesYStats();
+  toast(`Foto guardada: ${state.seleccion.Nombre}`, "success");
 }
 
 function actualizarPendientesYStats() {
@@ -191,7 +206,7 @@ function downloadBlob(name, blob) {
 }
 
 async function comprimirGrupo() {
-  if (!state.grupoActual) return alert("Selecciona un grupo.");
+  if (!state.grupoActual) return toast("Selecciona un grupo primero.", "error");
   const zip = new JSZip();
   for (const e of state.estudiantes) {
     const doc = sanitizeDoc(e.Documento);
@@ -201,10 +216,11 @@ async function comprimirGrupo() {
   }
   const blob = await zip.generateAsync({ type: "blob" });
   downloadBlob(`${state.grupoActual}.zip`, blob);
+  toast(`ZIP generado: ${state.grupoActual}.zip`, "success");
 }
 
 function generarPdfAsistencia() {
-  if (!state.grupoActual) return alert("Selecciona un grupo.");
+  if (!state.grupoActual) return toast("Selecciona un grupo primero.", "error");
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   pdf.setFontSize(14);
@@ -218,6 +234,7 @@ function generarPdfAsistencia() {
     y += 8;
   });
   pdf.save(`asistencia_${state.grupoActual}.pdf`);
+  toast("Lista de asistencia generada.", "success");
 }
 
 function drawPie(total, conFoto) {
@@ -242,7 +259,7 @@ function drawPie(total, conFoto) {
 }
 
 function exportarEstado() {
-  if (!state.grupoActual) return alert("Selecciona un grupo.");
+  if (!state.grupoActual) return toast("Selecciona un grupo primero.", "error");
   const { jsPDF } = window.jspdf;
   const total = state.estudiantes.length;
   const conFoto = state.estudiantes.filter((e) => state.fotos.has(sanitizeDoc(e.Documento))).length;
@@ -269,10 +286,11 @@ function exportarEstado() {
     y += 8;
   });
   pdf.save(`estado_${state.grupoActual}.pdf`);
+  toast("Reporte de estado exportado.", "success");
 }
 
 function exportarTodos() {
-  if (!state.rows.length) return alert("Carga CSV primero.");
+  if (!state.rows.length) return toast("Carga el CSV primero.", "error");
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   const groups = [...new Set(state.rows.map((r) => String(r.Grupo).trim()))].sort();
@@ -304,32 +322,38 @@ function exportarTodos() {
   });
   pdf.text(`TOTAL: ${total}`, 10, y + 10);
   pdf.save("todos_los_estudiantes.pdf");
+  toast("Reporte completo exportado.", "success");
 }
 
 function initHelp() {
   const dlg = $("help-modal");
   document.querySelectorAll(".help-btn").forEach((b) => {
     b.addEventListener("click", () => {
-      const key = b.dataset.help;
-      $("help-title").textContent = `Ayuda: ${key}`;
-      $("help-body").textContent = helpText[key] || "Sin descripción.";
+      const entry = helpText[b.dataset.help];
+      $("help-title").textContent = entry?.title ?? "Ayuda";
+      $("help-body").textContent  = entry?.body  ?? "Sin descripción.";
       dlg.showModal();
     });
   });
 }
 
 function bindEvents() {
-  $("btn-activar").onclick = () => activarCamara().catch((e) => alert(`No se pudo activar cámara: ${e.message}`));
+  $("btn-activar").onclick = () => activarCamara().catch((e) => toast(`No se pudo activar cámara: ${e.message}`, "error"));
   $("csv-file").onchange = async (ev) => {
     const file = ev.target.files?.[0];
     if (!file) return;
     const text = await file.text();
-    state.rows = parseCSV(text);
+    try {
+      state.rows = parseCSV(text);
+    } catch (err) {
+      return toast(err.message, "error", 5000);
+    }
     state.groups = [...new Set(state.rows.map((r) => String(r.Grupo).trim()))].filter(Boolean).sort();
     $("grupo").innerHTML = state.groups.map((g) => `<option value="${g}">${g}</option>`).join("");
     if (state.groups.length) {
       $("grupo").value = state.groups[0];
       seleccionarGrupo();
+      toast(`CSV cargado: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "info");
     }
   };
   $("btn-seleccionar").onclick = seleccionarGrupo;
@@ -345,7 +369,7 @@ function bindEvents() {
   bindEvents();
   initHelp();
   if (!navigator.mediaDevices?.getUserMedia) {
-    alert("Este navegador no soporta acceso a cámara.");
+    toast("Este navegador no soporta acceso a cámara.", "error", 5000);
     return;
   }
   await detectarCamaras().catch(() => {});
