@@ -14,6 +14,7 @@ Aplicación web 100% cliente para gestionar fotos estudiantiles directamente des
   - PDF de estado con gráfico.
   - PDF de todos los grupos.
 - Incluye botones `?` pequeños para explicar cada función dentro de la UI.
+- Interfaz renovada en estilo minimalista, con diseño responsive para escritorio, tablet y móvil.
 
 ## Ejecutar local
 
