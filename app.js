@@ -33,13 +33,74 @@ const helpText = {
   "cargar-csv":        { title: "Cargar archivo CSV",      body: "Lee un CSV local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes." },
   "seleccionar-grupo": { title: "Seleccionar grupo",       body: "Filtra estudiantes por grupo y reinicia la vista para trabajar solo con ese grupo." },
   "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara, lo redimensiona a 100×100 px y lo asocia al estudiante seleccionado." },
-  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP descargable con las fotos del grupo actual para enviarlo o archivarlo." }
+  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP descargable con las fotos del grupo actual para enviarlo o archivarlo." },
+  "cargar-url":        { title: "URL fija del CSV",        body: "Pega el link de tu Google Sheets (compartido como público) o de un archivo CSV en GitHub Raw. La app convierte el link automáticamente y guarda la URL en el navegador para cargarla sola la próxima vez." }
 };
 
 const $ = (id) => document.getElementById(id);
+const STORAGE_URL_KEY = "siged_csv_url";
 
 function sanitizeDoc(value) {
   return String(value ?? "").replace(/[.-]/g, "").trim();
+}
+
+/* ── URL helpers ──────────────────────────────────── */
+function normalizarUrl(url) {
+  url = url.trim();
+
+  // Google Sheets: cualquier URL de edición/vista → URL de exportación CSV
+  const sheetsMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (sheetsMatch) {
+    const id = sheetsMatch[1];
+    const gidMatch = url.match(/[#?&]gid=(\d+)/);
+    const gid = gidMatch ? `&gid=${gidMatch[1]}` : "";
+    return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv${gid}`;
+  }
+
+  // GitHub: URL de blob → URL raw
+  const ghMatch = url.match(/github\.com\/([^/]+\/[^/]+)\/blob\/(.+)/);
+  if (ghMatch) {
+    return `https://raw.githubusercontent.com/${ghMatch[1]}/${ghMatch[2]}`;
+  }
+
+  return url;
+}
+
+function actualizarStatusUrl(url) {
+  const el = $("url-status");
+  const btn = $("btn-olvidar-url");
+  if (url) {
+    el.textContent = `✓ URL configurada: ${url.length > 60 ? url.slice(0, 57) + "…" : url}`;
+    el.className = "field-status field-status--ok";
+    btn.hidden = false;
+  } else {
+    el.textContent = "";
+    el.className = "field-status";
+    btn.hidden = true;
+  }
+}
+
+async function cargarDesdeUrl(url, silencioso = false) {
+  const urlFinal = normalizarUrl(url);
+  if (!silencioso) toast("Cargando CSV desde URL…", "info", 2000);
+  try {
+    const res = await fetch(urlFinal);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    state.rows = parseCSV(text);
+    state.groups = [...new Set(state.rows.map((r) => String(r.Grupo).trim()))].filter(Boolean).sort();
+    $("grupo").innerHTML = state.groups.map((g) => `<option value="${g}">${g}</option>`).join("");
+    if (state.groups.length) {
+      $("grupo").value = state.groups[0];
+      seleccionarGrupo();
+    }
+    localStorage.setItem(STORAGE_URL_KEY, url);
+    $("csv-url").value = url;
+    actualizarStatusUrl(url);
+    toast(`CSV cargado: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "success");
+  } catch (err) {
+    toast(`No se pudo cargar el CSV: ${err.message}`, "error", 6000);
+  }
 }
 
 function parseCsvLine(line) {
@@ -339,6 +400,7 @@ function initHelp() {
 
 function bindEvents() {
   $("btn-activar").onclick = () => activarCamara().catch((e) => toast(`No se pudo activar cámara: ${e.message}`, "error"));
+
   $("csv-file").onchange = async (ev) => {
     const file = ev.target.files?.[0];
     if (!file) return;
@@ -356,6 +418,20 @@ function bindEvents() {
       toast(`CSV cargado: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "info");
     }
   };
+
+  $("btn-cargar-url").onclick = () => {
+    const url = $("csv-url").value.trim();
+    if (!url) return toast("Pega una URL válida primero.", "error");
+    cargarDesdeUrl(url);
+  };
+
+  $("btn-olvidar-url").onclick = () => {
+    localStorage.removeItem(STORAGE_URL_KEY);
+    $("csv-url").value = "";
+    actualizarStatusUrl(null);
+    toast("URL eliminada del navegador.", "info");
+  };
+
   $("btn-seleccionar").onclick = seleccionarGrupo;
   $("buscar").oninput = renderEstudiantes;
   $("btn-guardar").onclick = guardarFoto;
@@ -368,6 +444,15 @@ function bindEvents() {
 (async function init() {
   bindEvents();
   initHelp();
+
+  // Restaurar URL guardada y auto-cargar CSV
+  const savedUrl = localStorage.getItem(STORAGE_URL_KEY);
+  if (savedUrl) {
+    $("csv-url").value = savedUrl;
+    actualizarStatusUrl(savedUrl);
+    await cargarDesdeUrl(savedUrl, true);
+  }
+
   if (!navigator.mediaDevices?.getUserMedia) {
     toast("Este navegador no soporta acceso a cámara.", "error", 5000);
     return;

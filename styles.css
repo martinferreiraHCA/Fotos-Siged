@@ -294,6 +294,53 @@ progress::-moz-progress-bar {
   flex-wrap: wrap;
 }
 
+/* Campo que ocupa las dos columnas del grid */
+.field--full { grid-column: 1 / -1; }
+
+/* Badge "Google Sheets · GitHub Raw" */
+.field-badge {
+  display: inline-block;
+  margin-left: .35rem;
+  font-size: .6rem;
+  padding: .1rem .38rem;
+  border-radius: 999px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border: 1px solid rgba(79,70,229,.25);
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: none;
+  vertical-align: middle;
+}
+
+/* Texto de estado debajo del campo URL */
+.field-status {
+  margin: .3rem 0 0;
+  font-size: .72rem;
+  color: var(--muted);
+  min-height: 1em;
+}
+
+.field-status--ok {
+  color: var(--success);
+  font-weight: 500;
+}
+
+/* Botón compacto "✕ olvidar URL" */
+#btn-olvidar-url {
+  padding: .46rem .55rem;
+  color: var(--warning);
+  border-color: rgba(220,38,38,.25);
+  background: var(--warning-light);
+}
+
+#btn-olvidar-url:hover {
+  background: #fee2e2;
+  border-color: var(--warning);
+  box-shadow: none;
+  color: var(--warning);
+}
+
 /* ── Content grid ─────────────────────────────────── */
 .content {
   margin-top: .85rem;

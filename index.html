@@ -92,11 +92,25 @@
             </div>
 
             <div class="field">
-              <label for="csv-file">Archivo CSV</label>
+              <label for="csv-file">Archivo CSV local</label>
               <div class="field-inline">
                 <input id="csv-file" type="file" accept=".csv,text/csv" />
                 <button class="help-btn" data-help="cargar-csv" aria-label="Ayuda para cargar CSV">?</button>
               </div>
+            </div>
+
+            <div class="field field--full">
+              <label for="csv-url">
+                URL fija del CSV
+                <span class="field-badge">Google Sheets · GitHub Raw</span>
+              </label>
+              <div class="field-inline">
+                <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/…" />
+                <button id="btn-cargar-url">🔗 Cargar URL</button>
+                <button id="btn-olvidar-url" class="btn-secondary" title="Quitar URL guardada" hidden>✕</button>
+                <button class="help-btn" data-help="cargar-url" aria-label="Ayuda para cargar desde URL">?</button>
+              </div>
+              <p id="url-status" class="field-status"></p>
             </div>
 
             <div class="field">
