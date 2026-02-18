@@ -245,6 +245,45 @@ progress::-moz-progress-bar {
   border-top: 1px solid var(--line);
 }
 
+/* ── Session panel ────────────────────────────────── */
+.sesion-panel { background: var(--surface-soft); border-radius: var(--radius-md); padding: .7rem; }
+
+.sesion-count {
+  margin: 0 0 .25rem;
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.sesion-hint {
+  margin: 0 0 .6rem;
+  font-size: .72rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.btn-danger-soft {
+  background: var(--warning-light);
+  color: var(--warning);
+  border-color: rgba(220,38,38,.25);
+  font-size: .78rem;
+  padding: .4rem .6rem;
+}
+
+.btn-danger-soft:hover {
+  background: #fee2e2;
+  border-color: var(--warning);
+  box-shadow: 0 2px 8px rgba(220,38,38,.15);
+  color: var(--warning);
+}
+
+.btn-danger-soft:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 /* ── Last photo ───────────────────────────────────── */
 #ultima-foto {
   width: 100%;

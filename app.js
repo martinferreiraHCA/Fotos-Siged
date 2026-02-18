@@ -38,7 +38,8 @@ const helpText = {
 };
 
 const $ = (id) => document.getElementById(id);
-const STORAGE_URL_KEY = "siged_csv_url";
+const STORAGE_URL_KEY   = "siged_csv_url";
+const STORAGE_FOTOS_KEY = "siged_fotos";
 
 function sanitizeDoc(value) {
   return String(value ?? "").replace(/[.-]/g, "").trim();
@@ -78,6 +79,55 @@ function actualizarStatusUrl(url) {
     el.className = "field-status";
     btn.hidden = true;
   }
+}
+
+/* ── Persistencia de sesión (fotos en localStorage) ── */
+function guardarSesion() {
+  try {
+    const obj = {};
+    state.fotos.forEach((v, k) => { obj[k] = v; });
+    localStorage.setItem(STORAGE_FOTOS_KEY, JSON.stringify(obj));
+    actualizarInfoSesion();
+  } catch {
+    toast("Almacenamiento lleno. Exporta el ZIP y libera espacio.", "error", 5000);
+  }
+}
+
+function restaurarSesion() {
+  try {
+    const raw = localStorage.getItem(STORAGE_FOTOS_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    Object.entries(obj).forEach(([k, v]) => state.fotos.set(k, v));
+  } catch {
+    // datos corruptos — ignorar silenciosamente
+  }
+}
+
+function actualizarInfoSesion() {
+  const count = state.fotos.size;
+  const el = $("sesion-count");
+  if (!el) return;
+  if (count > 0) {
+    el.textContent = `${count} foto${count !== 1 ? "s" : ""} guardadas en este navegador`;
+    el.style.color = "var(--success)";
+  } else {
+    el.textContent = "Sin fotos guardadas aún";
+    el.style.color = "var(--muted)";
+  }
+  $("btn-limpiar-sesion").disabled = count === 0;
+}
+
+function limpiarSesion() {
+  if (!confirm(`¿Borrar las ${state.fotos.size} fotos guardadas en este navegador? Esta acción no se puede deshacer.`)) return;
+  state.fotos.clear();
+  localStorage.removeItem(STORAGE_FOTOS_KEY);
+  actualizarInfoSesion();
+  renderEstudiantes();
+  actualizarPendientesYStats();
+  $("ultima-foto").getContext("2d").clearRect(0, 0, 150, 150);
+  $("ultimo-estudiante").textContent = "Ninguna foto tomada.";
+  toast("Sesión limpiada. Todas las fotos borradas del navegador.", "info");
 }
 
 async function cargarDesdeUrl(url, silencioso = false) {
@@ -232,6 +282,7 @@ function guardarFoto() {
   $("ultimo-estudiante").textContent = `${state.seleccion.Nombre} (${doc})`;
   renderEstudiantes();
   actualizarPendientesYStats();
+  guardarSesion();
   toast(`Foto guardada: ${state.seleccion.Nombre}`, "success");
 }
 
@@ -432,6 +483,8 @@ function bindEvents() {
     toast("URL eliminada del navegador.", "info");
   };
 
+  $("btn-limpiar-sesion").onclick = limpiarSesion;
+
   $("btn-seleccionar").onclick = seleccionarGrupo;
   $("buscar").oninput = renderEstudiantes;
   $("btn-guardar").onclick = guardarFoto;
@@ -444,6 +497,10 @@ function bindEvents() {
 (async function init() {
   bindEvents();
   initHelp();
+
+  // Restaurar fotos guardadas en el navegador
+  restaurarSesion();
+  actualizarInfoSesion();
 
   // Restaurar URL guardada y auto-cargar CSV
   const savedUrl = localStorage.getItem(STORAGE_URL_KEY);
