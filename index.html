@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sistema de Gestión de Fotos Estudiantiles</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-header__content">
+        <div>
+          <p class="eyebrow">SIGED • Versión Web</p>
+          <h1>Sistema de Gestión de Fotos Estudiantiles</h1>
+          <p class="subtitle">Diseño responsivo para operar 100% online desde GitHub Pages.</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="card sidebar">
+        <h2 class="section-title">
+          Información general
+          <button class="help-btn" data-help="panel-info" aria-label="Ayuda sobre información">?</button>
+        </h2>
+
+        <div class="pill-row">
+          <span class="pill">Grupo actual</span>
+          <strong id="grupo-actual">No seleccionado</strong>
+        </div>
+
+        <ul class="stats-grid">
+          <li>
+            <span>Total</span>
+            <strong id="stat-total">0</strong>
+          </li>
+          <li>
+            <span>Con foto</span>
+            <strong id="stat-con-foto">0</strong>
+          </li>
+          <li>
+            <span>Pendientes</span>
+            <strong id="stat-pendientes">0</strong>
+          </li>
+        </ul>
+
+        <div class="progress-wrap">
+          <label for="progress">Progreso del grupo</label>
+          <progress id="progress" value="0" max="100"></progress>
+        </div>
+
+        <section class="mini-section">
+          <h3 class="section-title section-title--small">
+            Última foto
+            <button class="help-btn" data-help="ultima-foto" aria-label="Ayuda sobre última foto">?</button>
+          </h3>
+          <canvas id="ultima-foto" width="150" height="150"></canvas>
+          <p id="ultimo-estudiante">Ninguna foto tomada.</p>
+        </section>
+
+        <section class="mini-section">
+          <h3 class="section-title section-title--small">Pendientes</h3>
+          <ul id="pendientes" class="list compact"></ul>
+        </section>
+
+        <section class="mini-section">
+          <h3 class="section-title section-title--small">Reportes</h3>
+          <div class="actions-col">
+            <button id="btn-asistencia" class="btn-secondary">Imprimir Lista de Asistencia</button>
+            <button id="btn-estado" class="btn-secondary">Exportar Estado Actual</button>
+            <button id="btn-todos" class="btn-secondary">Exportar Todos los Estudiantes</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="card main-panel">
+        <section class="controls card-soft">
+          <div class="controls-grid">
+            <div class="field">
+              <label for="camara">Cámara</label>
+              <div class="field-inline">
+                <select id="camara"></select>
+                <button id="btn-activar">🎥 Activar cámara</button>
+                <button class="help-btn" data-help="activar-camara" aria-label="Ayuda para activar cámara">?</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="csv-file">Archivo CSV</label>
+              <div class="field-inline">
+                <input id="csv-file" type="file" accept=".csv,text/csv" />
+                <button class="help-btn" data-help="cargar-csv" aria-label="Ayuda para cargar CSV">?</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="grupo">Grupo</label>
+              <div class="field-inline">
+                <select id="grupo"></select>
+                <button id="btn-seleccionar">✅ Seleccionar grupo</button>
+                <button class="help-btn" data-help="seleccionar-grupo" aria-label="Ayuda para seleccionar grupo">?</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="buscar">Buscar estudiante</label>
+              <input id="buscar" type="text" placeholder="Nombre o documento" />
+            </div>
+          </div>
+        </section>
+
+        <section class="content">
+          <article class="camera-block card-soft">
+            <h3>Vista previa de cámara</h3>
+            <video id="preview" autoplay playsinline></video>
+            <canvas id="captura" width="320" height="240" hidden></canvas>
+          </article>
+
+          <article class="students-block card-soft">
+            <h3>Lista de estudiantes</h3>
+            <ul id="estudiantes" class="list"></ul>
+          </article>
+        </section>
+
+        <footer class="actions-bar card-soft">
+          <span id="estudiante-actual">Estudiante: Ninguno seleccionado</span>
+          <div class="actions-end">
+            <button id="btn-guardar" class="btn-success">💾 Guardar foto</button>
+            <button class="help-btn" data-help="guardar-foto" aria-label="Ayuda para guardar foto">?</button>
+            <button id="btn-finalizar" class="btn-secondary">📦 Finalizar y generar ZIP</button>
+            <button class="help-btn" data-help="comprimir" aria-label="Ayuda para comprimir grupo">?</button>
+          </div>
+        </footer>
+      </section>
+    </main>
+
+    <dialog id="help-modal">
+      <article class="help-dialog">
+        <h3 id="help-title">Ayuda</h3>
+        <p id="help-body"></p>
+        <form method="dialog">
+          <button class="btn-secondary">Cerrar</button>
+        </form>
+      </article>
+    </dialog>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
