@@ -44,6 +44,131 @@ body {
   display: flex;
   align-items: center;
   gap: .9rem;
+  justify-content: space-between;
+}
+
+/* ── Header user section ──────────────────────────── */
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-shrink: 0;
+}
+
+/* Botón de engranaje (configuración Drive) */
+.btn-header-icon {
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.12);
+  border-color: rgba(255,255,255,.2);
+  color: rgba(255,255,255,.8);
+  font-size: .9rem;
+  cursor: pointer;
+  transition: background .15s;
+}
+.btn-header-icon:hover {
+  background: rgba(255,255,255,.22);
+  border-color: rgba(255,255,255,.35);
+  box-shadow: none;
+  transform: none;
+}
+
+/* Botón "Conectar Drive" con logo de Google */
+.btn-google {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  background: #fff;
+  color: #3c4043;
+  border: 1.5px solid rgba(255,255,255,.4);
+  border-radius: var(--radius-sm);
+  padding: .4rem .75rem;
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, box-shadow .15s;
+}
+.btn-google:hover {
+  background: #f8f9fa;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  transform: translateY(-1px);
+  color: #3c4043;
+  border-color: rgba(255,255,255,.4);
+}
+
+/* Info de usuario logueado */
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: var(--radius-md);
+  padding: .3rem .55rem .3rem .3rem;
+}
+.user-avatar {
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid rgba(255,255,255,.45);
+  flex-shrink: 0;
+}
+.user-details {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.user-details strong {
+  font-size: .75rem;
+  color: #fff;
+  font-weight: 600;
+}
+.drive-status {
+  font-size: .63rem;
+  color: rgba(255,255,255,.7);
+  font-weight: 400;
+}
+
+/* Botón de salir en el header */
+.btn-header-sm {
+  font-size: .72rem;
+  padding: .26rem .5rem;
+  border-radius: 6px;
+  background: rgba(255,255,255,.15);
+  color: rgba(255,255,255,.9);
+  border-color: rgba(255,255,255,.25);
+}
+.btn-header-sm:hover {
+  background: rgba(255,255,255,.25);
+  border-color: rgba(255,255,255,.4);
+  box-shadow: none;
+  transform: none;
+  color: #fff;
+}
+
+/* ── Config Drive modal ───────────────────────────── */
+.config-drive-dialog { padding: 1.25rem; }
+
+.config-steps {
+  margin: .6rem 0 0;
+  padding-left: 1.3rem;
+  font-size: .83rem;
+  color: var(--muted);
+  line-height: 1.75;
+}
+.config-steps a { color: var(--primary); }
+
+.config-actions {
+  display: flex;
+  gap: .5rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
 }
 
 .header-icon {
