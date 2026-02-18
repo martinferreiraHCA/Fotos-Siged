@@ -69,6 +69,13 @@
           <ul id="pendientes" class="list compact"></ul>
         </section>
 
+        <section class="mini-section sesion-panel">
+          <h3 class="section-title section-title--small">Sesión guardada</h3>
+          <p id="sesion-count" class="sesion-count">Sin fotos guardadas aún</p>
+          <p class="sesion-hint">Las fotos se guardan automáticamente en este navegador y se recuperan al recargar la página.</p>
+          <button id="btn-limpiar-sesion" class="btn-secondary btn-danger-soft" disabled>🗑 Limpiar sesión</button>
+        </section>
+
         <section class="mini-section">
           <h3 class="section-title section-title--small">Reportes</h3>
           <div class="actions-col">
@@ -92,11 +99,25 @@
             </div>
 
             <div class="field">
-              <label for="csv-file">Archivo CSV</label>
+              <label for="csv-file">Archivo CSV local</label>
               <div class="field-inline">
                 <input id="csv-file" type="file" accept=".csv,text/csv" />
                 <button class="help-btn" data-help="cargar-csv" aria-label="Ayuda para cargar CSV">?</button>
               </div>
+            </div>
+
+            <div class="field field--full">
+              <label for="csv-url">
+                URL fija del CSV
+                <span class="field-badge">Google Sheets · GitHub Raw</span>
+              </label>
+              <div class="field-inline">
+                <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/…" />
+                <button id="btn-cargar-url">🔗 Cargar URL</button>
+                <button id="btn-olvidar-url" class="btn-secondary" title="Quitar URL guardada" hidden>✕</button>
+                <button class="help-btn" data-help="cargar-url" aria-label="Ayuda para cargar desde URL">?</button>
+              </div>
+              <p id="url-status" class="field-status"></p>
             </div>
 
             <div class="field">

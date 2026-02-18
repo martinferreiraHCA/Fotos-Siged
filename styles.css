@@ -245,6 +245,45 @@ progress::-moz-progress-bar {
   border-top: 1px solid var(--line);
 }
 
+/* ── Session panel ────────────────────────────────── */
+.sesion-panel { background: var(--surface-soft); border-radius: var(--radius-md); padding: .7rem; }
+
+.sesion-count {
+  margin: 0 0 .25rem;
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.sesion-hint {
+  margin: 0 0 .6rem;
+  font-size: .72rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.btn-danger-soft {
+  background: var(--warning-light);
+  color: var(--warning);
+  border-color: rgba(220,38,38,.25);
+  font-size: .78rem;
+  padding: .4rem .6rem;
+}
+
+.btn-danger-soft:hover {
+  background: #fee2e2;
+  border-color: var(--warning);
+  box-shadow: 0 2px 8px rgba(220,38,38,.15);
+  color: var(--warning);
+}
+
+.btn-danger-soft:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 /* ── Last photo ───────────────────────────────────── */
 #ultima-foto {
   width: 100%;
@@ -292,6 +331,53 @@ progress::-moz-progress-bar {
   gap: .4rem;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* Campo que ocupa las dos columnas del grid */
+.field--full { grid-column: 1 / -1; }
+
+/* Badge "Google Sheets · GitHub Raw" */
+.field-badge {
+  display: inline-block;
+  margin-left: .35rem;
+  font-size: .6rem;
+  padding: .1rem .38rem;
+  border-radius: 999px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border: 1px solid rgba(79,70,229,.25);
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: none;
+  vertical-align: middle;
+}
+
+/* Texto de estado debajo del campo URL */
+.field-status {
+  margin: .3rem 0 0;
+  font-size: .72rem;
+  color: var(--muted);
+  min-height: 1em;
+}
+
+.field-status--ok {
+  color: var(--success);
+  font-weight: 500;
+}
+
+/* Botón compacto "✕ olvidar URL" */
+#btn-olvidar-url {
+  padding: .46rem .55rem;
+  color: var(--warning);
+  border-color: rgba(220,38,38,.25);
+  background: var(--warning-light);
+}
+
+#btn-olvidar-url:hover {
+  background: #fee2e2;
+  border-color: var(--warning);
+  box-shadow: none;
+  color: var(--warning);
 }
 
 /* ── Content grid ─────────────────────────────────── */
