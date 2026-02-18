@@ -23,7 +23,13 @@ const state = {
   seleccion: null,
   fotos: new Map(), // documento => dataURL
   stream: null,
-  currentDevices: []
+  currentDevices: [],
+  // Google Drive
+  driveToken:    null,
+  driveUser:     null,
+  driveFolderId: null,
+  driveGrupoId:  null,
+  driveFiles:    new Map() // documento => fileId en Drive
 };
 
 const helpText = {
@@ -38,8 +44,11 @@ const helpText = {
 };
 
 const $ = (id) => document.getElementById(id);
-const STORAGE_URL_KEY   = "siged_csv_url";
-const STORAGE_FOTOS_KEY = "siged_fotos";
+const STORAGE_URL_KEY    = "siged_csv_url";
+const STORAGE_FOTOS_KEY  = "siged_fotos";
+const STORAGE_GCLIENT_KEY = "siged_google_client_id";
+const DRIVE_ROOT          = "SIGED Fotos";
+let tokenClient = null;
 
 function sanitizeDoc(value) {
   return String(value ?? "").replace(/[.-]/g, "").trim();
@@ -128,6 +137,179 @@ function limpiarSesion() {
   $("ultima-foto").getContext("2d").clearRect(0, 0, 150, 150);
   $("ultimo-estudiante").textContent = "Ninguna foto tomada.";
   toast("Sesión limpiada. Todas las fotos borradas del navegador.", "info");
+}
+
+/* ── Google Drive / Auth ──────────────────────────── */
+function obtenerClientId() {
+  return localStorage.getItem(STORAGE_GCLIENT_KEY) ?? "";
+}
+
+function inicializarGIS(clientId) {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: "https://www.googleapis.com/auth/drive.file profile email",
+    callback: async (response) => {
+      if (response.error) {
+        toast(`Error de autenticación: ${response.error}`, "error");
+        return;
+      }
+      state.driveToken = response.access_token;
+      await obtenerInfoUsuario().catch(() => {});
+      actualizarUIUsuario();
+      if (state.grupoActual) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
+    }
+  });
+}
+
+async function obtenerInfoUsuario() {
+  const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+    headers: { Authorization: `Bearer ${state.driveToken}` }
+  });
+  state.driveUser = await res.json();
+}
+
+function loginConGoogle() {
+  const clientId = obtenerClientId();
+  if (!clientId) { $("config-drive-modal").showModal(); return; }
+  if (!window.google?.accounts?.oauth2) {
+    toast("Google Sign-In aún cargando, intenta en un momento.", "info");
+    return;
+  }
+  if (!tokenClient) inicializarGIS(clientId);
+  tokenClient.requestAccessToken({ prompt: state.driveToken ? "" : "select_account" });
+}
+
+function logoutGoogle() {
+  if (state.driveToken) google.accounts.oauth2.revoke(state.driveToken, () => {});
+  state.driveToken    = null;
+  state.driveUser     = null;
+  state.driveFolderId = null;
+  state.driveGrupoId  = null;
+  state.driveFiles.clear();
+  actualizarUIUsuario();
+  toast("Sesión de Google cerrada.", "info");
+}
+
+function actualizarUIUsuario() {
+  const loggedIn = !!state.driveToken;
+  $("btn-login-google").hidden = loggedIn;
+  $("user-info").hidden = !loggedIn;
+  if (loggedIn && state.driveUser) {
+    $("user-name").textContent = state.driveUser.name ?? state.driveUser.email ?? "Usuario";
+    const avatar = $("user-avatar");
+    if (state.driveUser.picture) { avatar.src = state.driveUser.picture; avatar.hidden = false; }
+    else { avatar.hidden = true; }
+  }
+}
+
+// ── Drive API helpers ──────────────────────────────
+async function driveRequest(method, path, body = null, params = {}) {
+  const url = new URL(`https://www.googleapis.com/drive/v3/${path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const init = { method, headers: { Authorization: `Bearer ${state.driveToken}` } };
+  if (body instanceof FormData) {
+    init.body = body;
+  } else if (body) {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(url.toString(), init);
+  if (res.status === 401) throw new Error("Token expirado. Vuelve a iniciar sesión con Google.");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message ?? `HTTP ${res.status}`);
+  }
+  return res.status !== 204 ? res.json() : null;
+}
+
+async function encontrarOCrearCarpeta(nombre, parentId = null) {
+  let q = `name='${nombre}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  if (parentId) q += ` and '${parentId}' in parents`;
+  const { files = [] } = await driveRequest("GET", "files", null, { q, fields: "files(id)" });
+  if (files.length) return files[0].id;
+  const carpeta = await driveRequest("POST", "files", {
+    name: nombre,
+    mimeType: "application/vnd.google-apps.folder",
+    ...(parentId ? { parents: [parentId] } : {})
+  });
+  return carpeta.id;
+}
+
+function base64ToBlob(b64, mime = "image/png") {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+async function subirFotoADrive(doc, dataUrl) {
+  if (!state.driveToken || !state.driveGrupoId) return;
+  const blob = base64ToBlob(dataUrl.split(",")[1]);
+  const existingId = state.driveFiles.get(doc);
+  if (existingId) {
+    const res = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
+      { method: "PATCH", headers: { Authorization: `Bearer ${state.driveToken}`, "Content-Type": "image/png" }, body: blob }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } else {
+    const form = new FormData();
+    form.append("metadata", new Blob([JSON.stringify({
+      name: `${doc}.png`, parents: [state.driveGrupoId]
+    })], { type: "application/json" }));
+    form.append("file", blob);
+    const res = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+      { method: "POST", headers: { Authorization: `Bearer ${state.driveToken}` }, body: form }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const file = await res.json();
+    if (file.id) state.driveFiles.set(doc, file.id);
+  }
+}
+
+async function sincronizarFotosDeDrive(grupoNombre) {
+  if (!state.driveToken) return;
+  const statusEl = $("drive-status");
+  if (statusEl) statusEl.textContent = "Sincronizando…";
+  try {
+    if (!state.driveFolderId) {
+      state.driveFolderId = await encontrarOCrearCarpeta(DRIVE_ROOT);
+    }
+    state.driveGrupoId = await encontrarOCrearCarpeta(grupoNombre, state.driveFolderId);
+    state.driveFiles.clear();
+
+    const q = `'${state.driveGrupoId}' in parents and trashed=false and mimeType='image/png'`;
+    const { files = [] } = await driveRequest("GET", "files", null, { q, fields: "files(id,name)" });
+
+    let nuevas = 0;
+    for (const file of files) {
+      const doc = file.name.replace(/\.png$/i, "");
+      state.driveFiles.set(doc, file.id);
+      if (!state.fotos.has(doc)) {
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
+          headers: { Authorization: `Bearer ${state.driveToken}` }
+        });
+        state.fotos.set(doc, await blobToDataUrl(await res.blob()));
+        nuevas++;
+      }
+    }
+    if (nuevas > 0) { guardarSesion(); renderEstudiantes(); actualizarPendientesYStats(); }
+    if (statusEl) statusEl.textContent = `Drive ✓ · ${files.length} foto${files.length !== 1 ? "s" : ""}`;
+    if (nuevas > 0) toast(`${nuevas} foto${nuevas !== 1 ? "s" : ""} descargada${nuevas !== 1 ? "s" : ""} desde Drive.`, "success");
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Error de sincronización";
+    toast(`Error al sincronizar con Drive: ${err.message}`, "error", 6000);
+  }
 }
 
 async function cargarDesdeUrl(url, silencioso = false) {
@@ -230,6 +412,8 @@ function seleccionarGrupo() {
   renderEstudiantes();
   actualizarPendientesYStats();
   $("estudiante-actual").textContent = "Estudiante: Ninguno seleccionado";
+  // Sincronizar fotos desde Drive si hay sesión activa
+  if (state.driveToken) sincronizarFotosDeDrive(grp).catch(() => {});
 }
 
 function renderEstudiantes() {
@@ -283,6 +467,10 @@ function guardarFoto() {
   renderEstudiantes();
   actualizarPendientesYStats();
   guardarSesion();
+  // Subir a Drive en segundo plano si hay sesión activa
+  if (state.driveToken) {
+    subirFotoADrive(doc, dataUrl).catch((e) => toast(`No se pudo subir a Drive: ${e.message}`, "error"));
+  }
   toast(`Foto guardada: ${state.seleccion.Nombre}`, "success");
 }
 
@@ -485,6 +673,22 @@ function bindEvents() {
 
   $("btn-limpiar-sesion").onclick = limpiarSesion;
 
+  $("btn-login-google").onclick  = loginConGoogle;
+  $("btn-logout-google").onclick = logoutGoogle;
+  $("btn-config-drive").onclick  = () => {
+    const id = obtenerClientId();
+    if (id) $("client-id-input").value = id;
+    $("config-drive-modal").showModal();
+  };
+  $("btn-guardar-config-drive").onclick = () => {
+    const id = $("client-id-input").value.trim();
+    if (!id) return toast("Pega el Client ID primero.", "error");
+    localStorage.setItem(STORAGE_GCLIENT_KEY, id);
+    $("config-drive-modal").close();
+    tokenClient = null; // forzar reinicialización con nuevo ID
+    loginConGoogle();
+  };
+
   $("btn-seleccionar").onclick = seleccionarGrupo;
   $("buscar").oninput = renderEstudiantes;
   $("btn-guardar").onclick = guardarFoto;
@@ -508,6 +712,20 @@ function bindEvents() {
     $("csv-url").value = savedUrl;
     actualizarStatusUrl(savedUrl);
     await cargarDesdeUrl(savedUrl, true);
+  }
+
+  // Pre-inicializar GIS si ya hay Client ID guardado
+  const clientId = obtenerClientId();
+  if (clientId) {
+    // Esperar a que GIS cargue (puede tardar un momento con defer)
+    const waitForGIS = () => new Promise((resolve) => {
+      if (window.google?.accounts?.oauth2) { resolve(); return; }
+      const t = setInterval(() => { if (window.google?.accounts?.oauth2) { clearInterval(t); resolve(); } }, 200);
+      setTimeout(() => { clearInterval(t); resolve(); }, 5000);
+    });
+    waitForGIS().then(() => {
+      if (window.google?.accounts?.oauth2) inicializarGIS(clientId);
+    });
   }
 
   if (!navigator.mediaDevices?.getUserMedia) {
