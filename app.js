@@ -674,17 +674,199 @@ async function comprimirGrupo() {
 function generarPdfAsistencia() {
   if (!state.grupoActual) return toast("Selecciona un grupo primero.", "error");
   const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF();
-  pdf.setFontSize(14);
-  pdf.text(`Lista de Asistencia - Grupo ${state.grupoActual}`, 10, 15);
-  pdf.setFontSize(10);
-  let y = 30;
-  state.estudiantes.forEach((e, i) => {
-    if (y > 280) { pdf.addPage(); y = 20; }
-    const doc = sanitizeDoc(e.Documento);
-    pdf.text(`${i + 1}. ${e.Nombre} - ${doc}   Firma: __________   [ ]`, 10, y);
-    y += 8;
-  });
+  const pdf = new jsPDF("landscape");
+  const pw = pdf.internal.pageSize.getWidth();
+  const ph = pdf.internal.pageSize.getHeight();
+  const margin = 12;
+  const totalEstudiantes = state.estudiantes.length;
+  const diasColumnas = 10;
+
+  // Layout de columnas
+  const colNum = 8;
+  const colDoc = 28;
+  const colNombre = 72;
+  const colDiaAncho = (pw - margin * 2 - colNum - colDoc - colNombre) / diasColumnas;
+  const rowH = 7;
+  const headerH = 8;
+
+  let pagina = 0;
+
+  function dibujarEncabezado(paginaNum, totalPaginas) {
+    const y = margin;
+
+    // Titulo
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(13);
+    pdf.setTextColor(0, 0, 0);
+    pdf.text("LISTA DE ASISTENCIA", pw / 2, y + 2, { align: "center" });
+
+    // Info del grupo
+    pdf.setFontSize(9);
+    pdf.setFont("helvetica", "normal");
+    const hoy = new Date().toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric" });
+    pdf.text(`Grupo: ${state.grupoActual}`, margin, y + 10);
+    pdf.text(`Total: ${totalEstudiantes} estudiantes`, margin, y + 15);
+    pdf.text(`Fecha de impresion: ${hoy}`, pw - margin, y + 10, { align: "right" });
+    pdf.text(`Pagina ${paginaNum} de ${totalPaginas}`, pw - margin, y + 15, { align: "right" });
+
+    // Linea separadora
+    pdf.setDrawColor(0);
+    pdf.setLineWidth(0.5);
+    pdf.line(margin, y + 18, pw - margin, y + 18);
+
+    return y + 22;
+  }
+
+  function dibujarCabeceraTabla(startY) {
+    const y = startY;
+    let x = margin;
+
+    // Fondo gris claro para la cabecera
+    pdf.setFillColor(230, 230, 230);
+    pdf.rect(margin, y, pw - margin * 2, headerH, "F");
+
+    // Bordes de cabecera
+    pdf.setDrawColor(0);
+    pdf.setLineWidth(0.3);
+    pdf.rect(margin, y, pw - margin * 2, headerH, "S");
+
+    // Textos de cabecera
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7);
+    pdf.setTextColor(0, 0, 0);
+
+    const centerY = y + headerH / 2 + 1.5;
+
+    // N°
+    pdf.text("N\u00b0", x + colNum / 2, centerY, { align: "center" });
+    x += colNum;
+    pdf.line(x, y, x, y + headerH);
+
+    // Nombre
+    pdf.text("NOMBRE COMPLETO", x + 2, centerY);
+    x += colNombre;
+    pdf.line(x, y, x, y + headerH);
+
+    // Documento
+    pdf.text("DOCUMENTO", x + 2, centerY);
+    x += colDoc;
+    pdf.line(x, y, x, y + headerH);
+
+    // Columnas de dias
+    for (let d = 1; d <= diasColumnas; d++) {
+      pdf.text(`${d}`, x + colDiaAncho / 2, centerY, { align: "center" });
+      x += colDiaAncho;
+      if (d < diasColumnas) {
+        pdf.line(x, y, x, y + headerH);
+      }
+    }
+
+    return y + headerH;
+  }
+
+  function dibujarFila(startY, num, nombre, documento, esPar) {
+    const y = startY;
+    let x = margin;
+
+    // Fondo alterno
+    if (esPar) {
+      pdf.setFillColor(245, 245, 245);
+      pdf.rect(margin, y, pw - margin * 2, rowH, "F");
+    }
+
+    // Borde de fila
+    pdf.setDrawColor(180, 180, 180);
+    pdf.setLineWidth(0.15);
+    pdf.rect(margin, y, pw - margin * 2, rowH, "S");
+
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7);
+    pdf.setTextColor(30, 30, 30);
+
+    const centerY = y + rowH / 2 + 1.5;
+
+    // N°
+    pdf.setFont("helvetica", "bold");
+    pdf.text(`${num}`, x + colNum / 2, centerY, { align: "center" });
+    pdf.setFont("helvetica", "normal");
+    x += colNum;
+    pdf.setDrawColor(180, 180, 180);
+    pdf.line(x, y, x, y + rowH);
+
+    // Nombre
+    const nombreCorto = nombre.length > 38 ? nombre.substring(0, 36) + "..." : nombre;
+    pdf.text(nombreCorto, x + 2, centerY);
+    x += colNombre;
+    pdf.line(x, y, x, y + rowH);
+
+    // Documento
+    pdf.text(documento, x + 2, centerY);
+    x += colDoc;
+    pdf.line(x, y, x, y + rowH);
+
+    // Casillas de asistencia (cuadraditos vacios)
+    for (let d = 0; d < diasColumnas; d++) {
+      const cx = x + colDiaAncho / 2;
+      const cy = y + rowH / 2;
+      const size = 3.5;
+      pdf.setDrawColor(150, 150, 150);
+      pdf.setLineWidth(0.2);
+      pdf.rect(cx - size / 2, cy - size / 2, size, size, "S");
+      x += colDiaAncho;
+      if (d < diasColumnas - 1) {
+        pdf.setDrawColor(200, 200, 200);
+        pdf.line(x, y, x, y + rowH);
+      }
+    }
+
+    return y + rowH;
+  }
+
+  function dibujarPiePagina() {
+    pdf.setDrawColor(0);
+    pdf.setLineWidth(0.3);
+    pdf.line(margin, ph - 16, pw - margin, ph - 16);
+    pdf.setFont("helvetica", "italic");
+    pdf.setFontSize(6.5);
+    pdf.setTextColor(100, 100, 100);
+    pdf.text("SIGED - Sistema de Gestion de Fotos Estudiantiles", margin, ph - 12);
+    pdf.text("Marcar con X la asistencia de cada dia", pw - margin, ph - 12, { align: "right" });
+  }
+
+  // Calcular cuantas filas caben por pagina
+  const espacioCabecera = margin + 22 + headerH; // encabezado + tabla header
+  const espacioPie = 22;
+  const filasPorPagina = Math.floor((ph - espacioCabecera - espacioPie) / rowH);
+  const totalPaginas = Math.ceil(totalEstudiantes / filasPorPagina);
+
+  // Generar paginas
+  for (let p = 0; p < totalPaginas; p++) {
+    if (p > 0) pdf.addPage("landscape");
+    pagina = p + 1;
+
+    let y = dibujarEncabezado(pagina, totalPaginas);
+    y = dibujarCabeceraTabla(y);
+
+    const inicio = p * filasPorPagina;
+    const fin = Math.min(inicio + filasPorPagina, totalEstudiantes);
+
+    for (let i = inicio; i < fin; i++) {
+      const e = state.estudiantes[i];
+      const doc = sanitizeDoc(e.Documento);
+      const nombre = String(e.Nombre).trim();
+      y = dibujarFila(y, i + 1, nombre, doc, i % 2 === 0);
+    }
+
+    // Borde exterior grueso
+    const tablaAlto = headerH + (fin - inicio) * rowH;
+    const tablaY = y - tablaAlto;
+    pdf.setDrawColor(0);
+    pdf.setLineWidth(0.5);
+    pdf.rect(margin, tablaY, pw - margin * 2, tablaAlto, "S");
+
+    dibujarPiePagina();
+  }
+
   pdf.save(`asistencia_${state.grupoActual}.pdf`);
   toast("Lista de asistencia generada.", "success");
 }
