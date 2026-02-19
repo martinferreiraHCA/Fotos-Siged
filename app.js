@@ -137,6 +137,7 @@ function limpiarSesion() {
   actualizarPendientesYStats();
   $("ultima-foto").getContext("2d").clearRect(0, 0, 150, 150);
   $("ultimo-estudiante").textContent = "Ninguna foto tomada.";
+  actualizarStudentPreview();
   toast("Sesión limpiada. Todas las fotos borradas del navegador.", "info");
 }
 
@@ -201,6 +202,7 @@ function actualizarUIUsuario() {
     if (state.driveUser.picture) { avatar.src = state.driveUser.picture; avatar.hidden = false; }
     else { avatar.hidden = true; }
   }
+  actualizarDrivePanel();
 }
 
 // ── Drive API helpers ──────────────────────────────
@@ -278,16 +280,46 @@ async function subirFotoADrive(doc, dataUrl) {
   }
 }
 
+function actualizarDrivePanel() {
+  const panel = $("drive-panel");
+  if (!state.driveToken) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const pathText = $("drive-path-text");
+  if (state.grupoActual && state.driveGrupoId) {
+    pathText.textContent = `${DRIVE_ROOT} / ${state.grupoActual}`;
+  } else if (state.driveFolderId) {
+    pathText.textContent = `${DRIVE_ROOT}`;
+  } else {
+    pathText.textContent = "Conectado — selecciona un grupo";
+  }
+
+  const syncCount = $("drive-sync-count");
+  const totalDrive = state.driveFiles.size;
+  if (totalDrive > 0) {
+    syncCount.textContent = `${totalDrive} foto${totalDrive !== 1 ? "s" : ""} en Drive`;
+  } else if (state.grupoActual) {
+    syncCount.textContent = "Sin fotos en Drive para este grupo";
+    syncCount.style.color = "var(--muted)";
+  } else {
+    syncCount.textContent = "";
+  }
+}
+
 async function sincronizarFotosDeDrive(grupoNombre) {
   if (!state.driveToken) return;
   const statusEl = $("drive-status");
   if (statusEl) statusEl.textContent = "Sincronizando…";
+  actualizarDrivePanel();
   try {
     if (!state.driveFolderId) {
       state.driveFolderId = await encontrarOCrearCarpeta(DRIVE_ROOT);
     }
     state.driveGrupoId = await encontrarOCrearCarpeta(grupoNombre, state.driveFolderId);
     state.driveFiles.clear();
+    actualizarDrivePanel();
 
     const q = `'${state.driveGrupoId}' in parents and trashed=false and mimeType='image/png'`;
     const { files = [] } = await driveRequest("GET", "files", null, { q, fields: "files(id,name)" });
@@ -306,6 +338,7 @@ async function sincronizarFotosDeDrive(grupoNombre) {
     }
     if (nuevas > 0) { guardarSesion(); renderEstudiantes(); actualizarPendientesYStats(); }
     if (statusEl) statusEl.textContent = `Drive ✓ · ${files.length} foto${files.length !== 1 ? "s" : ""}`;
+    actualizarDrivePanel();
     if (nuevas > 0) toast(`${nuevas} foto${nuevas !== 1 ? "s" : ""} descargada${nuevas !== 1 ? "s" : ""} desde Drive.`, "success");
   } catch (err) {
     if (statusEl) statusEl.textContent = "Error de sincronización";
@@ -412,6 +445,7 @@ function seleccionarGrupo() {
   $("grupo-actual").textContent = grp || "No seleccionado";
   renderEstudiantes();
   actualizarPendientesYStats();
+  actualizarStudentPreview();
   $("estudiante-actual").textContent = "Estudiante: Ninguno seleccionado";
   // Sincronizar fotos desde Drive si hay sesión activa
   if (state.driveToken) sincronizarFotosDeDrive(grp).catch(() => {});
@@ -426,17 +460,85 @@ function renderEstudiantes() {
     const nombre = String(e.Nombre).trim();
     if (busqueda && !nombre.toLowerCase().includes(busqueda) && !doc.includes(busqueda)) return;
     const li = document.createElement("li");
-    li.textContent = `${nombre} - ${doc}${state.fotos.has(doc) ? " ✅" : ""}`;
-    if (state.fotos.has(doc)) li.classList.add("done");
+    const tieneFoto = state.fotos.has(doc);
+
+    if (tieneFoto) {
+      li.classList.add("done", "has-thumb");
+      const img = document.createElement("img");
+      img.className = "student-thumb";
+      img.src = state.fotos.get(doc);
+      img.alt = nombre;
+      li.appendChild(img);
+      const col = document.createElement("div");
+      col.className = "student-info-col";
+      col.innerHTML = `<span class="student-name-row">${nombre} - ${doc}</span><span class="student-status-row status-done">Con foto</span>`;
+      li.appendChild(col);
+    } else {
+      li.classList.add("has-thumb");
+      const placeholder = document.createElement("div");
+      placeholder.className = "student-thumb";
+      placeholder.style.cssText = "background:var(--line);display:flex;align-items:center;justify-content:center;font-size:.5rem;color:var(--muted);";
+      placeholder.textContent = "—";
+      li.appendChild(placeholder);
+      const col = document.createElement("div");
+      col.className = "student-info-col";
+      col.innerHTML = `<span class="student-name-row">${nombre} - ${doc}</span><span class="student-status-row">Sin foto</span>`;
+      li.appendChild(col);
+    }
+
     if (state.seleccion && sanitizeDoc(state.seleccion.Documento) === doc) li.classList.add("selected");
     li.onclick = () => {
       state.seleccion = state.estudiantes[idx];
-      const estado = state.fotos.has(doc) ? "CON FOTO ✅" : "SIN FOTO ❌";
-      $("estudiante-actual").textContent = `Estudiante: ${nombre} - ${doc} - ${estado}`;
+      $("estudiante-actual").textContent = `Estudiante: ${nombre} - ${doc}`;
       renderEstudiantes();
+      actualizarStudentPreview();
     };
     ul.appendChild(li);
   });
+}
+
+function actualizarStudentPreview() {
+  const panel = $("student-preview");
+  if (!state.seleccion) {
+    panel.hidden = true;
+    return;
+  }
+  const doc = sanitizeDoc(state.seleccion.Documento);
+  const nombre = String(state.seleccion.Nombre).trim();
+  const tieneFoto = state.fotos.has(doc);
+  const foto = $("sp-photo");
+  const noFoto = $("sp-no-photo");
+
+  panel.hidden = false;
+  $("sp-name").textContent = nombre;
+  $("sp-doc").textContent = `Doc: ${doc}`;
+
+  if (tieneFoto) {
+    foto.src = state.fotos.get(doc);
+    foto.hidden = false;
+    noFoto.hidden = true;
+  } else {
+    foto.hidden = true;
+    noFoto.hidden = false;
+  }
+
+  // Drive status badge
+  const badge = $("sp-drive-status");
+  if (state.driveToken) {
+    badge.hidden = false;
+    if (state.driveFiles.has(doc)) {
+      badge.textContent = "Subida a Drive";
+      badge.className = "sp-drive-badge drive-synced";
+    } else if (tieneFoto) {
+      badge.textContent = "Solo local";
+      badge.className = "sp-drive-badge drive-local";
+    } else {
+      badge.textContent = "Sin foto";
+      badge.className = "sp-drive-badge drive-pending";
+    }
+  } else {
+    badge.hidden = true;
+  }
 }
 
 async function capturarFoto() {
@@ -481,10 +583,14 @@ function guardarFoto() {
   $("ultimo-estudiante").textContent = `${state.seleccion.Nombre} (${doc})`;
   renderEstudiantes();
   actualizarPendientesYStats();
+  actualizarStudentPreview();
   guardarSesion();
   // Subir a Drive en segundo plano si hay sesión activa
   if (state.driveToken) {
-    subirFotoADrive(doc, dataUrl).catch((e) => toast(`No se pudo subir a Drive: ${e.message}`, "error"));
+    subirFotoADrive(doc, dataUrl).then(() => {
+      actualizarStudentPreview();
+      actualizarDrivePanel();
+    }).catch((e) => toast(`No se pudo subir a Drive: ${e.message}`, "error"));
   }
   toast(`Foto guardada: ${state.seleccion.Nombre}`, "success");
 }

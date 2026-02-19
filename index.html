@@ -101,6 +101,17 @@
           <button id="btn-limpiar-sesion" class="btn-secondary btn-danger-soft" disabled>Limpiar sesi&oacute;n</button>
         </section>
 
+        <section id="drive-panel" class="mini-section drive-panel" hidden>
+          <h3 class="section-title section-title--small">Google Drive</h3>
+          <div class="drive-path">
+            <span class="drive-path-icon">&#128193;</span>
+            <span id="drive-path-text" class="drive-path-text">No conectado</span>
+          </div>
+          <div class="drive-stats">
+            <span id="drive-sync-count" class="drive-sync-count"></span>
+          </div>
+        </section>
+
         <section class="mini-section">
           <h3 class="section-title section-title--small">Reportes</h3>
           <div class="actions-col">
@@ -158,6 +169,19 @@
               <label for="buscar">Buscar estudiante</label>
               <input id="buscar" type="text" placeholder="Nombre o documento" />
             </div>
+          </div>
+        </section>
+
+        <!-- Student photo preview card -->
+        <section id="student-preview" class="student-preview card-soft" hidden>
+          <div class="sp-photo-wrap">
+            <img id="sp-photo" class="sp-photo" src="" alt="Foto del estudiante" />
+            <div class="sp-no-photo" id="sp-no-photo">Sin foto</div>
+          </div>
+          <div class="sp-info">
+            <strong id="sp-name" class="sp-name"></strong>
+            <span id="sp-doc" class="sp-doc"></span>
+            <span id="sp-drive-status" class="sp-drive-badge" hidden></span>
           </div>
         </section>
 
