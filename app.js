@@ -450,6 +450,20 @@ function renderEstudiantes() {
   });
 }
 
+async function capturarFoto() {
+  if (!state.seleccion) return toast("Selecciona un estudiante primero.", "error");
+  if (!state.stream) {
+    try {
+      await activarCamara();
+      toast("Cámara activada. Posiciona al estudiante y presiona Capturar.", "info");
+    } catch (e) {
+      toast(`No se pudo activar cámara: ${e.message}`, "error");
+    }
+    return;
+  }
+  guardarFoto();
+}
+
 function guardarFoto() {
   if (!state.seleccion) return toast("Selecciona un estudiante primero.", "error");
   if (!state.stream) return toast("Activa la cámara primero.", "error");
@@ -709,15 +723,15 @@ function bindEvents() {
   $("btn-estado").onclick = exportarEstado;
   $("btn-todos").onclick = exportarTodos;
 
-  // Capturar button (captures + saves in one click)
-  $("btn-capturar").onclick = guardarFoto;
+  // Capturar button (auto-activates camera if needed, then captures)
+  $("btn-capturar").onclick = capturarFoto;
 
   // Inline ZIP button under camera
   $("btn-zip-inline").onclick = comprimirGrupo;
 
   // Mobile bottom toolbar buttons
   $("tb-activar").onclick = () => activarCamara().catch((e) => toast(`No se pudo activar cámara: ${e.message}`, "error"));
-  $("tb-capturar").onclick = guardarFoto;
+  $("tb-capturar").onclick = capturarFoto;
   $("tb-guardar").onclick = guardarFoto;
   $("tb-zip").onclick = comprimirGrupo;
 }
