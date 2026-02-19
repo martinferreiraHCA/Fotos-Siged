@@ -151,7 +151,13 @@ function inicializarGIS(clientId) {
     scope: "https://www.googleapis.com/auth/drive.file profile email",
     callback: async (response) => {
       if (response.error) {
-        toast(`Error de autenticación: ${response.error}`, "error");
+        const msgs = {
+          popup_closed_by_user: "Cerraste el popup de Google antes de completar el login.",
+          popup_failed_to_open:  "El popup fue bloqueado. Permite ventanas emergentes para este sitio y vuelve a intentarlo.",
+          access_denied:         "Acceso denegado. Debes aceptar los permisos de Google Drive.",
+          invalid_client:        "Client ID inválido. Revisá la configuración en Google Cloud Console.",
+        };
+        toast(msgs[response.error] ?? `Error de autenticación: ${response.error}`, "error", 7000);
         return;
       }
       state.driveToken = response.access_token;
@@ -173,11 +179,16 @@ function loginConGoogle() {
   const clientId = obtenerClientId();
   if (!clientId) { $("config-drive-modal").showModal(); return; }
   if (!window.google?.accounts?.oauth2) {
-    toast("Google Sign-In aún cargando, intenta en un momento.", "info");
+    toast("No se pudo cargar Google Sign-In. Recarga la página e intenta de nuevo.", "error", 6000);
     return;
   }
-  if (!tokenClient) inicializarGIS(clientId);
-  tokenClient.requestAccessToken({ prompt: state.driveToken ? "" : "select_account" });
+  try {
+    if (!tokenClient) inicializarGIS(clientId);
+    // "consent" siempre muestra la pantalla de permisos → más confiable
+    tokenClient.requestAccessToken({ prompt: "consent" });
+  } catch (e) {
+    toast(`Error al iniciar con Google: ${e.message}`, "error", 7000);
+  }
 }
 
 function logoutGoogle() {
@@ -727,18 +738,10 @@ function bindEvents() {
     await cargarDesdeUrl(savedUrl, true);
   }
 
-  // Pre-inicializar GIS si ya hay Client ID guardado
+  // Pre-inicializar GIS (el script se carga de forma sincrónica antes que este módulo)
   const clientId = obtenerClientId();
-  if (clientId) {
-    // Esperar a que GIS cargue (puede tardar un momento con defer)
-    const waitForGIS = () => new Promise((resolve) => {
-      if (window.google?.accounts?.oauth2) { resolve(); return; }
-      const t = setInterval(() => { if (window.google?.accounts?.oauth2) { clearInterval(t); resolve(); } }, 200);
-      setTimeout(() => { clearInterval(t); resolve(); }, 5000);
-    });
-    waitForGIS().then(() => {
-      if (window.google?.accounts?.oauth2) inicializarGIS(clientId);
-    });
+  if (clientId && window.google?.accounts?.oauth2) {
+    inicializarGIS(clientId);
   }
 
   if (!navigator.mediaDevices?.getUserMedia) {
