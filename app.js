@@ -697,6 +697,18 @@ function bindEvents() {
   $("btn-asistencia").onclick = generarPdfAsistencia;
   $("btn-estado").onclick = exportarEstado;
   $("btn-todos").onclick = exportarTodos;
+
+  // Capturar button (captures + saves in one click)
+  $("btn-capturar").onclick = guardarFoto;
+
+  // Inline ZIP button under camera
+  $("btn-zip-inline").onclick = comprimirGrupo;
+
+  // Mobile bottom toolbar buttons
+  $("tb-activar").onclick = () => activarCamara().catch((e) => toast(`No se pudo activar cámara: ${e.message}`, "error"));
+  $("tb-capturar").onclick = guardarFoto;
+  $("tb-guardar").onclick = guardarFoto;
+  $("tb-zip").onclick = comprimirGrupo;
 }
 
 (async function init() {
