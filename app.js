@@ -266,7 +266,17 @@ function blobToDataUrl(blob) {
 }
 
 async function subirFotoADrive(doc, dataUrl) {
-  if (!state.driveToken || !state.driveGrupoId) return;
+  if (!state.driveToken) return;
+  // Auto-crear carpetas si no existen
+  if (!state.driveFolderId) {
+    state.driveFolderId = await encontrarOCrearCarpeta(DRIVE_ROOT);
+  }
+  if (!state.driveGrupoId && state.grupoActual) {
+    state.driveGrupoId = await encontrarOCrearCarpeta(state.grupoActual, state.driveFolderId);
+    actualizarDrivePanel();
+  }
+  if (!state.driveGrupoId) return;
+
   const blob = base64ToBlob(dataUrl.split(",")[1]);
   const existingId = state.driveFiles.get(doc);
   if (existingId) {
@@ -473,6 +483,7 @@ function renderEstudiantes() {
     const li = document.createElement("li");
     const tieneFoto = state.fotos.has(doc);
 
+    const enDrive = state.driveFiles.has(doc);
     if (tieneFoto) {
       li.classList.add("done", "has-thumb");
       const img = document.createElement("img");
@@ -482,7 +493,8 @@ function renderEstudiantes() {
       li.appendChild(img);
       const col = document.createElement("div");
       col.className = "student-info-col";
-      col.innerHTML = `<span class="student-name-row">${nombre} - ${doc}</span><span class="student-status-row status-done">Con foto</span>`;
+      const driveLabel = state.driveToken ? (enDrive ? " · Drive ✓" : " · Local") : "";
+      col.innerHTML = `<span class="student-name-row">${nombre} - ${doc}</span><span class="student-status-row status-done">Con foto${driveLabel}</span>`;
       li.appendChild(col);
     } else {
       li.classList.add("has-thumb");
@@ -596,14 +608,22 @@ function guardarFoto() {
   actualizarPendientesYStats();
   actualizarStudentPreview();
   guardarSesion();
-  // Subir a Drive en segundo plano si hay sesión activa
+
+  const nombreEst = state.seleccion.Nombre;
+
+  // Subir a Drive automáticamente si hay sesión activa
   if (state.driveToken) {
+    toast(`Foto guardada: ${nombreEst}. Subiendo a Drive…`, "info", 2000);
     subirFotoADrive(doc, dataUrl).then(() => {
       actualizarStudentPreview();
       actualizarDrivePanel();
-    }).catch((e) => toast(`No se pudo subir a Drive: ${e.message}`, "error"));
+      renderEstudiantes();
+      const ruta = state.grupoActual ? `${DRIVE_ROOT} / ${state.grupoActual}` : DRIVE_ROOT;
+      toast(`Subida a Drive: ${doc}.png → ${ruta}`, "success", 4000);
+    }).catch((e) => toast(`No se pudo subir a Drive: ${e.message}`, "error", 5000));
+  } else {
+    toast(`Foto guardada: ${nombreEst}`, "success");
   }
-  toast(`Foto guardada: ${state.seleccion.Nombre}`, "success");
 }
 
 function actualizarPendientesYStats() {
