@@ -775,54 +775,193 @@ function generarPdfAsistencia() {
   toast("Lista de asistencia generada.", "success");
 }
 
-function drawPie(total, conFoto) {
-  const c = document.createElement("canvas");
-  c.width = 400;
-  c.height = 240;
-  const ctx = c.getContext("2d");
-  const sin = total - conFoto;
-  const cx = 120, cy = 120, r = 80;
-  const angleCon = total ? (Math.PI * 2 * conFoto / total) : 0;
-
-  ctx.fillStyle = "#2ecc71";
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, 0, angleCon); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = "#e74c3c";
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, angleCon, Math.PI * 2); ctx.closePath(); ctx.fill();
-
-  ctx.fillStyle = "#222";
-  ctx.font = "14px Arial";
-  ctx.fillText(`Con foto: ${conFoto}`, 240, 100);
-  ctx.fillText(`Pendientes: ${sin}`, 240, 130);
-  return c.toDataURL("image/png");
-}
-
 function exportarEstado() {
   if (!state.grupoActual) return toast("Selecciona un grupo primero.", "error");
   const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF();
+  const pw = pdf.internal.pageSize.getWidth();
+  const ph = pdf.internal.pageSize.getHeight();
+  const margin = 14;
   const total = state.estudiantes.length;
   const conFoto = state.estudiantes.filter((e) => state.fotos.has(sanitizeDoc(e.Documento))).length;
   const sin = total - conFoto;
+  const pct = total ? Math.round((conFoto / total) * 100) : 0;
+  const hoy = new Date().toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-  const pdf = new jsPDF();
-  pdf.setFontSize(14);
-  pdf.text(`Reporte de Estado - Grupo ${state.grupoActual}`, 10, 15);
-  pdf.setFontSize(10);
-  pdf.text(`Total: ${total}`, 10, 30);
-  pdf.text(`Con foto: ${conFoto}`, 10, 38);
-  pdf.text(`Pendientes: ${sin}`, 10, 46);
-  pdf.addImage(drawPie(total, conFoto), "PNG", 10, 55, 180, 100);
+  const colNum = 10;
+  const colEstado = 22;
+  const colNombre = pw - margin * 2 - colNum - colEstado;
+  const rowH = 7.5;
+  const headerH = 8;
 
-  pdf.addPage();
-  pdf.setFontSize(12);
-  pdf.text("Estudiantes pendientes", 10, 15);
-  let y = 25;
-  state.estudiantes.forEach((e, i) => {
-    const doc = sanitizeDoc(e.Documento);
-    if (state.fotos.has(doc)) return;
-    if (y > 280) { pdf.addPage(); y = 20; }
-    pdf.text(`${i + 1}. ${e.Nombre} - ${doc}`, 10, y);
-    y += 8;
-  });
+  // Espacio para encabezado + resumen + cabecera tabla
+  const espacioEncabezado = 52;
+  const espacioPie = 14;
+  const filasPorPrimeraPag = Math.floor((ph - margin - espacioEncabezado - headerH - espacioPie) / rowH);
+  const filasPorPagSig = Math.floor((ph - margin - 28 - headerH - espacioPie) / rowH);
+  const totalPaginas = total <= filasPorPrimeraPag ? 1 : 1 + Math.ceil((total - filasPorPrimeraPag) / filasPorPagSig);
+
+  let estudianteIdx = 0;
+
+  for (let p = 0; p < totalPaginas; p++) {
+    if (p > 0) pdf.addPage();
+    let y = margin;
+
+    if (p === 0) {
+      // Título
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(12);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text("ESTADO ACTUAL - REGISTRO FOTOGRAFICO", pw / 2, y, { align: "center" });
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      y += 8;
+      pdf.text(`Grupo: ${state.grupoActual}`, margin, y);
+      pdf.text(`Fecha: ${hoy}`, pw - margin, y, { align: "right" });
+      y += 6;
+
+      // Resumen en recuadro
+      pdf.setDrawColor(0);
+      pdf.setLineWidth(0.3);
+      pdf.setFillColor(245, 245, 245);
+      const resH = 16;
+      pdf.rect(margin, y, pw - margin * 2, resH, "FD");
+      const colW = (pw - margin * 2) / 4;
+      const resY = y + resH / 2 + 1.5;
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      pdf.text(`Total: ${total}`, margin + colW * 0 + colW / 2, resY, { align: "center" });
+      pdf.text(`Con foto: ${conFoto}`, margin + colW * 1 + colW / 2, resY, { align: "center" });
+      pdf.text(`Pendientes: ${sin}`, margin + colW * 2 + colW / 2, resY, { align: "center" });
+      pdf.text(`Progreso: ${pct}%`, margin + colW * 3 + colW / 2, resY, { align: "center" });
+      // Separadores verticales
+      pdf.setDrawColor(190, 190, 190);
+      pdf.setLineWidth(0.15);
+      for (let c = 1; c < 4; c++) pdf.line(margin + colW * c, y, margin + colW * c, y + resH);
+
+      // Barra de progreso
+      y += resH + 4;
+      const barW = pw - margin * 2;
+      const barH = 4;
+      pdf.setFillColor(230, 230, 230);
+      pdf.rect(margin, y, barW, barH, "F");
+      if (pct > 0) {
+        pdf.setFillColor(60, 60, 60);
+        pdf.rect(margin, y, barW * (pct / 100), barH, "F");
+      }
+      pdf.setDrawColor(0);
+      pdf.setLineWidth(0.2);
+      pdf.rect(margin, y, barW, barH, "S");
+
+      y += barH + 5;
+      pdf.setDrawColor(0);
+      pdf.setLineWidth(0.4);
+      pdf.line(margin, y, pw - margin, y);
+      y += 4;
+    } else {
+      // Encabezado páginas siguientes
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(10);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(`ESTADO ACTUAL - ${state.grupoActual}`, pw / 2, y, { align: "center" });
+      y += 6;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      pdf.text(`Fecha: ${hoy}`, margin, y);
+      if (totalPaginas > 1) pdf.text(`Pag. ${p + 1}/${totalPaginas}`, pw - margin, y, { align: "right" });
+      y += 6;
+      pdf.setDrawColor(0);
+      pdf.setLineWidth(0.4);
+      pdf.line(margin, y, pw - margin, y);
+      y += 4;
+    }
+
+    // Cabecera de tabla
+    pdf.setFillColor(230, 230, 230);
+    pdf.rect(margin, y, pw - margin * 2, headerH, "FD");
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7.5);
+    pdf.setTextColor(0, 0, 0);
+    const hcY = y + headerH / 2 + 1.5;
+    let x = margin;
+    pdf.text("N\u00b0", x + colNum / 2, hcY, { align: "center" });
+    x += colNum;
+    pdf.line(x, y, x, y + headerH);
+    pdf.text("NOMBRE - DOCUMENTO", x + 2, hcY);
+    x += colNombre;
+    pdf.line(x, y, x, y + headerH);
+    pdf.text("ESTADO", x + colEstado / 2, hcY, { align: "center" });
+    y += headerH;
+
+    // Filas
+    const filasPag = p === 0 ? filasPorPrimeraPag : filasPorPagSig;
+    const fin = Math.min(estudianteIdx + filasPag, total);
+    const tablaInicio = y;
+
+    for (let i = estudianteIdx; i < fin; i++) {
+      const e = state.estudiantes[i];
+      const doc = sanitizeDoc(e.Documento);
+      const nombre = String(e.Nombre).trim();
+      const tiene = state.fotos.has(doc);
+      const esPar = i % 2 === 0;
+
+      if (esPar) {
+        pdf.setFillColor(248, 248, 248);
+        pdf.rect(margin, y, pw - margin * 2, rowH, "F");
+      }
+      pdf.setDrawColor(190, 190, 190);
+      pdf.setLineWidth(0.1);
+      pdf.rect(margin, y, pw - margin * 2, rowH, "S");
+
+      const cY = y + rowH / 2 + 1.5;
+      x = margin;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text(`${i + 1}`, x + colNum / 2, cY, { align: "center" });
+      x += colNum;
+      pdf.line(x, y, x, y + rowH);
+
+      pdf.setFont("helvetica", "normal");
+      const texto = `${nombre}  -  ${doc}`;
+      const textoCorto = texto.length > 60 ? texto.substring(0, 58) + "..." : texto;
+      pdf.text(textoCorto, x + 2, cY);
+      x += colNombre;
+      pdf.line(x, y, x, y + rowH);
+
+      // Estado
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7);
+      if (tiene) {
+        pdf.setTextColor(0, 0, 0);
+        pdf.text("\u2713", x + colEstado / 2, cY, { align: "center" });
+      } else {
+        pdf.setTextColor(120, 120, 120);
+        pdf.text("PEND.", x + colEstado / 2, cY, { align: "center" });
+      }
+      pdf.setTextColor(0, 0, 0);
+
+      y += rowH;
+    }
+
+    // Borde exterior tabla
+    const tablaAlto = headerH + (fin - estudianteIdx) * rowH;
+    pdf.setDrawColor(0);
+    pdf.setLineWidth(0.4);
+    pdf.rect(margin, tablaInicio - headerH, pw - margin * 2, tablaAlto + headerH, "S");
+
+    // Paginación en primera página
+    if (p === 0 && totalPaginas > 1) {
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7);
+      pdf.text(`Pag. 1/${totalPaginas}`, pw - margin, y + 4, { align: "right" });
+    }
+
+    estudianteIdx = fin;
+  }
+
   pdf.save(`estado_${state.grupoActual}.pdf`);
   toast("Reporte de estado exportado.", "success");
 }
