@@ -2,8 +2,8 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sistema de Gestión de Fotos Estudiantiles</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>SIGED - Fotos Estudiantiles</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -15,18 +15,17 @@
   <body>
     <header class="app-header">
       <div class="app-header__content">
-        <div class="header-icon" aria-hidden="true">📸</div>
-        <div>
-          <p class="eyebrow">SIGED • Versión Web</p>
-          <h1>Sistema de Gestión de Fotos Estudiantiles</h1>
-          <p class="subtitle">Diseño responsivo para operar 100% online desde GitHub Pages.</p>
+        <div class="header-brand">
+          <div class="header-icon" aria-hidden="true">📸</div>
+          <div>
+            <p class="eyebrow">SIGED</p>
+            <h1>Fotos Estudiantiles</h1>
+          </div>
         </div>
 
         <div class="header-user">
-          <!-- Botón de configuración siempre visible -->
           <button id="btn-config-drive" class="btn-header-icon" title="Configurar Google Drive" aria-label="Configurar Google Drive">⚙</button>
 
-          <!-- Botón de login (se oculta al iniciar sesión) -->
           <button id="btn-login-google" class="btn-google">
             <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -34,10 +33,9 @@
               <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
               <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
             </svg>
-            Conectar Drive
+            <span>Conectar Drive</span>
           </button>
 
-          <!-- Sección de usuario logueado (oculta al inicio) -->
           <div id="user-info" class="user-info" hidden>
             <img id="user-avatar" class="user-avatar" src="" alt="Avatar" />
             <div class="user-details">
@@ -53,8 +51,8 @@
     <main class="layout">
       <aside class="card sidebar">
         <h2 class="section-title">
-          Información general
-          <button class="help-btn" data-help="panel-info" aria-label="Ayuda sobre información">?</button>
+          Informaci&oacute;n general
+          <button class="help-btn" data-help="panel-info" aria-label="Ayuda sobre informaci&oacute;n">?</button>
         </h2>
 
         <div class="pill-row">
@@ -84,8 +82,8 @@
 
         <section class="mini-section">
           <h3 class="section-title section-title--small">
-            Última foto
-            <button class="help-btn" data-help="ultima-foto" aria-label="Ayuda sobre última foto">?</button>
+            &Uacute;ltima foto
+            <button class="help-btn" data-help="ultima-foto" aria-label="Ayuda sobre &uacute;ltima foto">?</button>
           </h3>
           <canvas id="ultima-foto" width="150" height="150"></canvas>
           <p id="ultimo-estudiante">Ninguna foto tomada.</p>
@@ -97,18 +95,18 @@
         </section>
 
         <section class="mini-section sesion-panel">
-          <h3 class="section-title section-title--small">Sesión guardada</h3>
-          <p id="sesion-count" class="sesion-count">Sin fotos guardadas aún</p>
-          <p class="sesion-hint">Las fotos se guardan automáticamente en este navegador y se recuperan al recargar la página.</p>
-          <button id="btn-limpiar-sesion" class="btn-secondary btn-danger-soft" disabled>🗑 Limpiar sesión</button>
+          <h3 class="section-title section-title--small">Sesi&oacute;n guardada</h3>
+          <p id="sesion-count" class="sesion-count">Sin fotos guardadas a&uacute;n</p>
+          <p class="sesion-hint">Las fotos se guardan autom&aacute;ticamente en este navegador y se recuperan al recargar la p&aacute;gina.</p>
+          <button id="btn-limpiar-sesion" class="btn-secondary btn-danger-soft" disabled>Limpiar sesi&oacute;n</button>
         </section>
 
         <section class="mini-section">
           <h3 class="section-title section-title--small">Reportes</h3>
           <div class="actions-col">
-            <button id="btn-asistencia" class="btn-secondary">Imprimir Lista de Asistencia</button>
-            <button id="btn-estado" class="btn-secondary">Exportar Estado Actual</button>
-            <button id="btn-todos" class="btn-secondary">Exportar Todos los Estudiantes</button>
+            <button id="btn-asistencia" class="btn-secondary">Lista de Asistencia</button>
+            <button id="btn-estado" class="btn-secondary">Estado Actual</button>
+            <button id="btn-todos" class="btn-secondary">Todos los Estudiantes</button>
           </div>
         </section>
       </aside>
@@ -117,11 +115,11 @@
         <section class="controls card-soft">
           <div class="controls-grid">
             <div class="field">
-              <label for="camara">Cámara</label>
+              <label for="camara">C&aacute;mara</label>
               <div class="field-inline">
                 <select id="camara"></select>
-                <button id="btn-activar">🎥 Activar cámara</button>
-                <button class="help-btn" data-help="activar-camara" aria-label="Ayuda para activar cámara">?</button>
+                <button id="btn-activar">Activar c&aacute;mara</button>
+                <button class="help-btn" data-help="activar-camara" aria-label="Ayuda para activar c&aacute;mara">?</button>
               </div>
             </div>
 
@@ -136,11 +134,11 @@
             <div class="field field--full">
               <label for="csv-url">
                 URL fija del CSV
-                <span class="field-badge">Google Sheets · GitHub Raw</span>
+                <span class="field-badge">Google Sheets &middot; GitHub Raw</span>
               </label>
               <div class="field-inline">
-                <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/…" />
-                <button id="btn-cargar-url">🔗 Cargar URL</button>
+                <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/..." />
+                <button id="btn-cargar-url">Cargar URL</button>
                 <button id="btn-olvidar-url" class="btn-secondary" title="Quitar URL guardada" hidden>✕</button>
                 <button class="help-btn" data-help="cargar-url" aria-label="Ayuda para cargar desde URL">?</button>
               </div>
@@ -151,7 +149,7 @@
               <label for="grupo">Grupo</label>
               <div class="field-inline">
                 <select id="grupo"></select>
-                <button id="btn-seleccionar">✅ Seleccionar grupo</button>
+                <button id="btn-seleccionar">Seleccionar grupo</button>
                 <button class="help-btn" data-help="seleccionar-grupo" aria-label="Ayuda para seleccionar grupo">?</button>
               </div>
             </div>
@@ -165,9 +163,18 @@
 
         <section class="content">
           <article class="camera-block card-soft">
-            <h3>Vista previa de cámara</h3>
+            <h3>Vista previa de c&aacute;mara</h3>
             <video id="preview" autoplay playsinline></video>
             <canvas id="captura" width="320" height="240" hidden></canvas>
+            <div class="capture-area">
+              <button id="btn-capturar" class="btn-capture">
+                <span class="capture-icon">&#128247;</span>
+                Capturar
+              </button>
+              <div class="camera-actions">
+                <button id="btn-zip-inline" class="btn-secondary">Generar ZIP</button>
+              </div>
+            </div>
           </article>
 
           <article class="students-block card-soft">
@@ -179,14 +186,34 @@
         <footer class="actions-bar card-soft">
           <span id="estudiante-actual">Estudiante: Ninguno seleccionado</span>
           <div class="actions-end">
-            <button id="btn-guardar" class="btn-success">💾 Guardar foto</button>
+            <button id="btn-guardar" class="btn-success">Guardar foto</button>
             <button class="help-btn" data-help="guardar-foto" aria-label="Ayuda para guardar foto">?</button>
-            <button id="btn-finalizar" class="btn-secondary">📦 Finalizar y generar ZIP</button>
+            <button id="btn-finalizar" class="btn-secondary">Generar ZIP</button>
             <button class="help-btn" data-help="comprimir" aria-label="Ayuda para comprimir grupo">?</button>
           </div>
         </footer>
       </section>
     </main>
+
+    <!-- Mobile bottom toolbar -->
+    <nav class="mobile-toolbar" aria-label="Acciones r&aacute;pidas">
+      <button id="tb-activar" type="button">
+        <span class="tb-icon">&#127909;</span>
+        C&aacute;mara
+      </button>
+      <button id="tb-capturar" class="btn-tb-capture" type="button">
+        <span class="tb-icon">&#128247;</span>
+        Capturar
+      </button>
+      <button id="tb-guardar" type="button">
+        <span class="tb-icon">&#128190;</span>
+        Guardar
+      </button>
+      <button id="tb-zip" type="button">
+        <span class="tb-icon">&#128230;</span>
+        ZIP
+      </button>
+    </nav>
 
     <dialog id="help-modal">
       <article class="help-dialog">
@@ -205,10 +232,10 @@
 
         <ol class="config-steps">
           <li>Ve a <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a></li>
-          <li>Crea un proyecto → habilita <strong>Google Drive API</strong></li>
-          <li>Credenciales → <strong>Crear credenciales → ID de cliente OAuth 2.0</strong></li>
-          <li>Tipo: <strong>Aplicación web</strong> → agrega tu dominio en "Orígenes de JS autorizados"</li>
-          <li>Copia el <strong>Client ID</strong> y pégalo abajo</li>
+          <li>Crea un proyecto &rarr; habilita <strong>Google Drive API</strong></li>
+          <li>Credenciales &rarr; <strong>Crear credenciales &rarr; ID de cliente OAuth 2.0</strong></li>
+          <li>Tipo: <strong>Aplicaci&oacute;n web</strong> &rarr; agrega tu dominio en "Or&iacute;genes de JS autorizados"</li>
+          <li>Copia el <strong>Client ID</strong> y p&eacute;galo abajo</li>
         </ol>
 
         <div class="field" style="margin-top:.85rem">
