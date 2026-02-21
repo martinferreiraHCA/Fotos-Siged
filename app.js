@@ -1,5 +1,8 @@
 const PHOTO_WIDTH = 100;
 const PHOTO_HEIGHT = 100;
+const HD_WIDTH = 1080;
+const HD_HEIGHT = 1080;
+const HD_FOLDER_NAME = "imagenes de estudiantes alta resolución";
 
 /* ── Toast notifications ──────────────────────────── */
 function toast(message, type = "info", duration = 3200) {
@@ -21,7 +24,8 @@ const state = {
   grupoActual: "",
   estudiantes: [],
   seleccion: null,
-  fotos: new Map(), // documento => dataURL
+  fotos: new Map(), // documento => dataURL (100x100)
+  fotosHD: new Map(), // documento => dataURL (1080x1080)
   stream: null,
   currentDevices: [],
   // Google Drive
@@ -29,7 +33,9 @@ const state = {
   driveUser:     null,
   driveFolderId: null,
   driveGrupoId:  null,
-  driveFiles:    new Map() // documento => fileId en Drive
+  driveFiles:    new Map(), // documento => fileId en Drive
+  driveHDFolderId: null,
+  driveHDGrupoId:  null
 };
 
 const helpText = {
@@ -38,8 +44,8 @@ const helpText = {
   "activar-camara":    { title: "Activar cámara",          body: "Solicita permisos de cámara al navegador y habilita la vista previa en tiempo real." },
   "cargar-csv":        { title: "Cargar archivo CSV",      body: "Lee un CSV local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes." },
   "seleccionar-grupo": { title: "Seleccionar grupo",       body: "Filtra estudiantes por grupo y reinicia la vista para trabajar solo con ese grupo." },
-  "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara, lo redimensiona a 100×100 px y lo asocia al estudiante seleccionado." },
-  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP descargable con las fotos del grupo actual para enviarlo o archivarlo." },
+  "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara y genera dos versiones: 100×100 px para SIGED y 1080×1080 px en alta resolución (nombre_apellido_cédula)." },
+  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP con dos carpetas: SIGED (100×100) e imágenes de estudiantes alta resolución (1080×1080)." },
   "cargar-url":        { title: "URL fija del CSV",        body: "Pega el link de tu Google Sheets (compartido como público) o de un archivo CSV en GitHub Raw. La app convierte el link automáticamente y guarda la URL en el navegador para cargarla sola la próxima vez." }
 };
 
@@ -53,6 +59,16 @@ let tokenClient = null;
 
 function sanitizeDoc(value) {
   return String(value ?? "").replace(/[.-]/g, "").trim();
+}
+
+function generarNombreHD(nombre, documento) {
+  const nombreLimpio = String(nombre ?? "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/[^a-zA-Z0-9\s]/g, "")
+    .replace(/\s+/g, "_");
+  const doc = sanitizeDoc(documento);
+  return `${nombreLimpio}_${doc}`;
 }
 
 /* ── URL helpers ──────────────────────────────────── */
@@ -131,7 +147,9 @@ function actualizarInfoSesion() {
 function limpiarSesion() {
   if (!confirm(`¿Borrar las ${state.fotos.size} fotos guardadas en este navegador? Esta acción no se puede deshacer.`)) return;
   state.fotos.clear();
+  state.fotosHD.clear();
   localStorage.removeItem(STORAGE_FOTOS_KEY);
+  limpiarSesionHD();
   actualizarInfoSesion();
   renderEstudiantes();
   actualizarPendientesYStats();
@@ -139,6 +157,54 @@ function limpiarSesion() {
   $("ultimo-estudiante").textContent = "Ninguna foto tomada.";
   actualizarStudentPreview();
   toast("Sesión limpiada. Todas las fotos borradas del navegador.", "info");
+}
+
+/* ── IndexedDB para fotos HD ─────────────────────── */
+function abrirDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("siged_fotos_hd", 1);
+    req.onupgradeneeded = (e) => {
+      e.target.result.createObjectStore("fotos_hd");
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function guardarSesionHD() {
+  try {
+    const db = await abrirDB();
+    const tx = db.transaction("fotos_hd", "readwrite");
+    const store = tx.objectStore("fotos_hd");
+    state.fotosHD.forEach((v, k) => store.put(v, k));
+    await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
+    db.close();
+  } catch { /* IndexedDB no disponible — ignorar */ }
+}
+
+async function restaurarSesionHD() {
+  try {
+    const db = await abrirDB();
+    const tx = db.transaction("fotos_hd", "readonly");
+    const store = tx.objectStore("fotos_hd");
+    const reqAll = store.getAll();
+    const reqKeys = store.getAllKeys();
+    await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
+    for (let i = 0; i < reqKeys.result.length; i++) {
+      state.fotosHD.set(reqKeys.result[i], reqAll.result[i]);
+    }
+    db.close();
+  } catch { /* IndexedDB no disponible — ignorar */ }
+}
+
+async function limpiarSesionHD() {
+  try {
+    const db = await abrirDB();
+    const tx = db.transaction("fotos_hd", "readwrite");
+    tx.objectStore("fotos_hd").clear();
+    await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
+    db.close();
+  } catch { /* IndexedDB no disponible — ignorar */ }
 }
 
 /* ── Google Drive / Auth ──────────────────────────── */
@@ -198,6 +264,8 @@ function logoutGoogle() {
   state.driveUser     = null;
   state.driveFolderId = null;
   state.driveGrupoId  = null;
+  state.driveHDFolderId = null;
+  state.driveHDGrupoId  = null;
   state.driveFiles.clear();
   actualizarUIUsuario();
   toast("Sesión de Google cerrada.", "info");
@@ -299,6 +367,33 @@ async function subirFotoADrive(doc, dataUrl) {
     const file = await res.json();
     if (file.id) state.driveFiles.set(doc, file.id);
   }
+}
+
+async function subirFotoHDADrive(doc, nombre, dataUrl) {
+  if (!state.driveToken) return;
+  if (!state.driveFolderId) {
+    state.driveFolderId = await encontrarOCrearCarpeta(DRIVE_ROOT);
+  }
+  if (!state.driveHDFolderId) {
+    state.driveHDFolderId = await encontrarOCrearCarpeta(HD_FOLDER_NAME, state.driveFolderId);
+  }
+  if (!state.driveHDGrupoId && state.grupoActual) {
+    state.driveHDGrupoId = await encontrarOCrearCarpeta(state.grupoActual, state.driveHDFolderId);
+  }
+  if (!state.driveHDGrupoId) return;
+
+  const nombreArchivo = generarNombreHD(nombre, doc);
+  const blob = base64ToBlob(dataUrl.split(",")[1], "image/jpeg");
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify({
+    name: `${nombreArchivo}.jpg`, parents: [state.driveHDGrupoId]
+  })], { type: "application/json" }));
+  form.append("file", blob);
+  const res = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+    { method: "POST", headers: { Authorization: `Bearer ${state.driveToken}` }, body: form }
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 function actualizarDrivePanel() {
@@ -452,7 +547,9 @@ async function activarCamara() {
   if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
   const deviceId = $("camara").value;
   state.stream = await navigator.mediaDevices.getUserMedia({
-    video: deviceId ? { deviceId: { exact: deviceId }, width: 320, height: 240 } : { width: 320, height: 240 },
+    video: deviceId
+      ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      : { width: { ideal: 1920 }, height: { ideal: 1080 } },
     audio: false
   });
   $("preview").srcObject = state.stream;
@@ -461,6 +558,7 @@ async function activarCamara() {
 function seleccionarGrupo() {
   const grp = $("grupo").value;
   state.grupoActual = grp;
+  state.driveHDGrupoId = null;
   state.estudiantes = state.rows.filter((r) => String(r.Grupo).trim() === grp.trim());
   state.seleccion = null;
   $("grupo-actual").textContent = grp || "No seleccionado";
@@ -583,17 +681,29 @@ function guardarFoto() {
   if (!state.stream) return toast("Activa la cámara primero.", "error");
   const video = $("preview");
   const canvas = $("captura");
+  // Capture at full camera resolution
+  canvas.width = video.videoWidth || 320;
+  canvas.height = video.videoHeight || 240;
   const ctx = canvas.getContext("2d");
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+  // SIGED: 100x100 PNG
   const out = document.createElement("canvas");
   out.width = PHOTO_WIDTH;
   out.height = PHOTO_HEIGHT;
   out.getContext("2d").drawImage(canvas, 0, 0, PHOTO_WIDTH, PHOTO_HEIGHT);
   const dataUrl = out.toDataURL("image/png");
 
+  // HD: 1080x1080 JPEG
+  const outHD = document.createElement("canvas");
+  outHD.width = HD_WIDTH;
+  outHD.height = HD_HEIGHT;
+  outHD.getContext("2d").drawImage(canvas, 0, 0, HD_WIDTH, HD_HEIGHT);
+  const dataUrlHD = outHD.toDataURL("image/jpeg", 0.92);
+
   const doc = sanitizeDoc(state.seleccion.Documento);
   state.fotos.set(doc, dataUrl);
+  state.fotosHD.set(doc, dataUrlHD);
 
   const ultima = $("ultima-foto").getContext("2d");
   const img = new Image();
@@ -611,18 +721,24 @@ function guardarFoto() {
 
   const nombreEst = state.seleccion.Nombre;
 
+  // Persistir HD en IndexedDB
+  guardarSesionHD();
+
   // Subir a Drive automáticamente si hay sesión activa
   if (state.driveToken) {
     toast(`Foto guardada: ${nombreEst}. Subiendo a Drive…`, "info", 2000);
-    subirFotoADrive(doc, dataUrl).then(() => {
+    Promise.all([
+      subirFotoADrive(doc, dataUrl),
+      subirFotoHDADrive(doc, nombreEst, dataUrlHD)
+    ]).then(() => {
       actualizarStudentPreview();
       actualizarDrivePanel();
       renderEstudiantes();
       const ruta = state.grupoActual ? `${DRIVE_ROOT} / ${state.grupoActual}` : DRIVE_ROOT;
-      toast(`Subida a Drive: ${doc}.png → ${ruta}`, "success", 4000);
+      toast(`Subida a Drive: ${doc}.png → ${ruta} (+ HD)`, "success", 4000);
     }).catch((e) => toast(`No se pudo subir a Drive: ${e.message}`, "error", 5000));
   } else {
-    toast(`Foto guardada: ${nombreEst}`, "success");
+    toast(`Foto guardada: ${nombreEst} (SIGED + HD)`, "success");
   }
 }
 
@@ -660,15 +776,27 @@ function downloadBlob(name, blob) {
 async function comprimirGrupo() {
   if (!state.grupoActual) return toast("Selecciona un grupo primero.", "error");
   const zip = new JSZip();
+  const folderSiged = zip.folder("SIGED");
+  const folderHD = zip.folder(HD_FOLDER_NAME);
+  let countHD = 0;
   for (const e of state.estudiantes) {
     const doc = sanitizeDoc(e.Documento);
     if (!state.fotos.has(doc)) continue;
+    // SIGED: 100x100 PNG nombrada por documento
     const data = state.fotos.get(doc).split(",")[1];
-    zip.file(`${doc}.png`, data, { base64: true });
+    folderSiged.file(`${doc}.png`, data, { base64: true });
+    // HD: 1080x1080 JPEG nombrada por nombre_apellido_cédula
+    if (state.fotosHD.has(doc)) {
+      const nombreArchivo = generarNombreHD(e.Nombre, e.Documento);
+      const dataHD = state.fotosHD.get(doc).split(",")[1];
+      folderHD.file(`${nombreArchivo}.jpg`, dataHD, { base64: true });
+      countHD++;
+    }
   }
   const blob = await zip.generateAsync({ type: "blob" });
   downloadBlob(`${state.grupoActual}.zip`, blob);
-  toast(`ZIP generado: ${state.grupoActual}.zip`, "success");
+  const hdMsg = countHD > 0 ? ` (+ ${countHD} HD)` : "";
+  toast(`ZIP generado: ${state.grupoActual}.zip${hdMsg}`, "success");
 }
 
 function generarPdfAsistencia() {
@@ -965,6 +1093,7 @@ function bindEvents() {
 
   // Restaurar fotos guardadas en el navegador
   restaurarSesion();
+  await restaurarSesionHD();
   actualizarInfoSesion();
 
   // Restaurar URL guardada y auto-cargar CSV
