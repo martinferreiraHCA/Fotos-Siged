@@ -517,30 +517,75 @@ function parseCSV(text) {
 }
 
 async function detectarCamaras() {
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  state.currentDevices = devices.filter((d) => d.kind === "videoinput");
   const select = $("camara");
   select.innerHTML = "";
-  state.currentDevices.forEach((d, idx) => {
-    const opt = document.createElement("option");
-    opt.value = d.deviceId;
-    opt.textContent = d.label || `Cámara ${idx}`;
-    select.appendChild(opt);
-  });
+
+  // Opciones por facingMode (funciona en iOS/Android sin necesitar permisos previos)
+  const optFront = document.createElement("option");
+  optFront.value = "user";
+  optFront.textContent = "Cámara frontal";
+  select.appendChild(optFront);
+
+  const optBack = document.createElement("option");
+  optBack.value = "environment";
+  optBack.textContent = "Cámara trasera";
+  select.appendChild(optBack);
+
+  // Intentar enumerar dispositivos específicos (solo muestra labels si ya hay permiso)
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    state.currentDevices = devices.filter((d) => d.kind === "videoinput");
+    state.currentDevices.forEach((d) => {
+      if (d.label && d.deviceId) {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label;
+        select.appendChild(opt);
+      }
+    });
+  } catch { /* enumerateDevices no disponible */ }
 }
 
 async function activarCamara() {
   if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
-  const deviceId = $("camara").value;
+  const selected = $("camara").value;
+
+  let videoConstraints;
+  if (selected === "user" || selected === "environment") {
+    // Selección por facingMode (mobile-friendly, funciona en iOS)
+    videoConstraints = {
+      facingMode: { ideal: selected },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    };
+  } else if (selected) {
+    // Selección por deviceId específico (desktop)
+    videoConstraints = {
+      deviceId: { exact: selected },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    };
+  } else {
+    // Fallback: cámara frontal por defecto
+    videoConstraints = {
+      facingMode: { ideal: "user" },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    };
+  }
+
   state.stream = await navigator.mediaDevices.getUserMedia({
-    video: deviceId
-      ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-      : { width: { ideal: 1920 }, height: { ideal: 1080 } },
+    video: videoConstraints,
     audio: false
   });
   const preview = $("preview");
   preview.srcObject = state.stream;
   preview.addEventListener("loadedmetadata", actualizarGuiaCrop, { once: true });
+
+  // Re-detectar cámaras ahora que el permiso fue otorgado (labels disponibles)
+  const prev = selected;
+  await detectarCamaras();
+  $("camara").value = prev;
 }
 
 function actualizarGuiaCrop() {
