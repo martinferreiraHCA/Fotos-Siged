@@ -538,7 +538,56 @@ async function activarCamara() {
       : { width: { ideal: 1920 }, height: { ideal: 1080 } },
     audio: false
   });
-  $("preview").srcObject = state.stream;
+  const preview = $("preview");
+  preview.srcObject = state.stream;
+  preview.addEventListener("loadedmetadata", actualizarGuiaCrop, { once: true });
+}
+
+function actualizarGuiaCrop() {
+  const video = $("preview");
+  const guide = $("crop-guide");
+  if (!guide) return;
+  if (!video || !video.videoWidth) {
+    guide.style.display = "none";
+    return;
+  }
+
+  const nw = video.videoWidth;   // resolución nativa
+  const nh = video.videoHeight;
+  const cw = video.clientWidth;  // tamaño del elemento en pantalla
+  const ch = video.clientHeight;
+
+  // Cómo object-fit:cover posiciona el video dentro del elemento
+  const scale = Math.max(cw / nw, ch / nh);
+  const displayedW = nw * scale;
+  const displayedH = nh * scale;
+  const offsetX = (cw - displayedW) / 2;
+  const offsetY = (ch - displayedH) / 2;
+
+  // Área de crop nativa (cuadrado centrado)
+  const cropSize = Math.min(nw, nh);
+  const sx = (nw - cropSize) / 2;
+  const sy = (nh - cropSize) / 2;
+
+  // Mapear a coordenadas del elemento
+  let gx = sx * scale + offsetX;
+  let gy = sy * scale + offsetY;
+  let gw = cropSize * scale;
+  let gh = cropSize * scale;
+
+  // Clampar dentro del contenedor visible
+  const gx2 = Math.min(cw, gx + gw);
+  const gy2 = Math.min(ch, gy + gh);
+  gx = Math.max(0, gx);
+  gy = Math.max(0, gy);
+  gw = gx2 - gx;
+  gh = gy2 - gy;
+
+  guide.style.display = "block";
+  guide.style.left = `${gx}px`;
+  guide.style.top = `${gy}px`;
+  guide.style.width = `${gw}px`;
+  guide.style.height = `${gh}px`;
 }
 
 function seleccionarGrupo() {
@@ -668,23 +717,30 @@ function guardarFoto() {
   const video = $("preview");
   const canvas = $("captura");
   // Capture at full camera resolution
-  canvas.width = video.videoWidth || 320;
-  canvas.height = video.videoHeight || 240;
+  const vw = video.videoWidth || 320;
+  const vh = video.videoHeight || 240;
+  canvas.width = vw;
+  canvas.height = vh;
   const ctx = canvas.getContext("2d");
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, 0, 0, vw, vh);
 
-  // SIGED: 100x100 PNG
+  // Center crop: tomar el cuadrado más grande del centro del frame
+  const cropSize = Math.min(vw, vh);
+  const sx = (vw - cropSize) / 2;
+  const sy = (vh - cropSize) / 2;
+
+  // SIGED: 100x100 PNG (center-cropped)
   const out = document.createElement("canvas");
   out.width = PHOTO_WIDTH;
   out.height = PHOTO_HEIGHT;
-  out.getContext("2d").drawImage(canvas, 0, 0, PHOTO_WIDTH, PHOTO_HEIGHT);
+  out.getContext("2d").drawImage(canvas, sx, sy, cropSize, cropSize, 0, 0, PHOTO_WIDTH, PHOTO_HEIGHT);
   const dataUrl = out.toDataURL("image/png");
 
-  // HD: 1080x1080 JPEG
+  // HD: 1080x1080 JPEG (center-cropped)
   const outHD = document.createElement("canvas");
   outHD.width = HD_WIDTH;
   outHD.height = HD_HEIGHT;
-  outHD.getContext("2d").drawImage(canvas, 0, 0, HD_WIDTH, HD_HEIGHT);
+  outHD.getContext("2d").drawImage(canvas, sx, sy, cropSize, cropSize, 0, 0, HD_WIDTH, HD_HEIGHT);
   const dataUrlHD = outHD.toDataURL("image/jpeg", 0.92);
 
   const doc = sanitizeDoc(state.seleccion.Documento);
@@ -1085,6 +1141,9 @@ function bindEvents() {
 
   // Inline ZIP button under camera
   $("btn-zip-inline").onclick = comprimirGrupo;
+
+  // Actualizar guía de crop al redimensionar ventana
+  window.addEventListener("resize", actualizarGuiaCrop);
 
   // Mobile bottom toolbar buttons
   $("tb-activar").onclick = () => activarCamara().catch((e) => toast(`No se pudo activar cámara: ${e.message}`, "error"));

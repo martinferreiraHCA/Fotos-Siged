@@ -670,14 +670,32 @@ progress::-moz-progress-bar {
 }
 
 /* ── Camera ───────────────────────────────────────── */
+.camera-preview-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--line);
+  background: #1a2332;
+}
+
 #preview {
   width: 100%;
   aspect-ratio: 4/3;
   object-fit: cover;
-  border-radius: var(--radius-md);
-  border: 2px solid var(--line);
-  background: #1a2332;
   display: block;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+}
+
+.crop-guide {
+  display: none;
+  position: absolute;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  border: 2px dashed rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 2;
 }
 
 /* ── Capture Button ──────────────────────────────── */

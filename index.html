@@ -188,7 +188,10 @@
         <section class="content">
           <article class="camera-block card-soft">
             <h3>Vista previa de c&aacute;mara</h3>
-            <video id="preview" autoplay playsinline></video>
+            <div class="camera-preview-wrap">
+              <video id="preview" autoplay playsinline></video>
+              <div id="crop-guide" class="crop-guide"></div>
+            </div>
             <canvas id="captura" width="320" height="240" hidden></canvas>
             <div class="capture-area">
               <button id="btn-capturar" class="btn-capture">
