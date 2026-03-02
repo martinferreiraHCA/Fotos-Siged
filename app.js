@@ -488,12 +488,13 @@ async function cargarDesdeUrl(url, silencioso = false) {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
+    const esSecundaria = $("nivel").value === "secundaria";
     if (xlsx) {
       const buffer = await res.arrayBuffer();
-      state.rows = parseXLSX(buffer);
+      state.rows = parseXLSX(buffer, esSecundaria);
     } else {
       const text = await res.text();
-      state.rows = parseCSV(text);
+      state.rows = parseCSV(text, esSecundaria);
     }
 
     state.groups = [...new Set(state.rows.map((r) => String(r.Grupo).trim()))].filter(Boolean).sort();
@@ -540,7 +541,7 @@ function parseCsvLine(line) {
   return out.map((v) => v.trim());
 }
 
-function parseCSV(text) {
+function parseCSV(text, concatenarCursoGrupo = false) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length);
   const useful = lines.slice(2);
   if (!useful.length) return [];
@@ -548,13 +549,16 @@ function parseCSV(text) {
   const idxGrupo = headers.indexOf("Grupo");
   const idxDocumento = headers.indexOf("Documento");
   const idxNombre = headers.indexOf("Nombre");
+  const idxCurso = concatenarCursoGrupo ? headers.indexOf("Curso") : -1;
   if ([idxGrupo, idxDocumento, idxNombre].some((idx) => idx < 0)) {
     throw new Error("CSV inválido: requiere columnas Grupo, Documento y Nombre.");
   }
   return useful.slice(1).map((line) => {
     const cols = parseCsvLine(line);
+    const curso = idxCurso >= 0 ? (cols[idxCurso] ?? "").trim() : "";
+    const grupo = (cols[idxGrupo] ?? "").trim();
     return {
-      Grupo: cols[idxGrupo] ?? "",
+      Grupo: curso ? `${curso} ${grupo}` : grupo,
       Documento: cols[idxDocumento] ?? "",
       Nombre: cols[idxNombre] ?? ""
     };
@@ -562,7 +566,7 @@ function parseCSV(text) {
 }
 
 /* ── XLSX parser (SheetJS) ───────────────────────── */
-function parseXLSX(data) {
+function parseXLSX(data, concatenarCursoGrupo = false) {
   if (typeof XLSX === "undefined") {
     throw new Error("La librería XLSX no está disponible. Recarga la página.");
   }
@@ -578,16 +582,21 @@ function parseXLSX(data) {
   const idxGrupo = headers.indexOf("Grupo");
   const idxDocumento = headers.indexOf("Documento");
   const idxNombre = headers.indexOf("Nombre");
+  const idxCurso = concatenarCursoGrupo ? headers.indexOf("Curso") : -1;
 
   if ([idxGrupo, idxDocumento, idxNombre].some((idx) => idx < 0)) {
     throw new Error("Archivo inválido: requiere columnas Grupo, Documento y Nombre.");
   }
 
-  return useful.slice(1).map((row) => ({
-    Grupo: String(row[idxGrupo] ?? "").trim(),
-    Documento: String(row[idxDocumento] ?? "").trim(),
-    Nombre: String(row[idxNombre] ?? "").trim()
-  })).filter((r) => r.Grupo || r.Documento || r.Nombre);
+  return useful.slice(1).map((row) => {
+    const curso = idxCurso >= 0 ? String(row[idxCurso] ?? "").trim() : "";
+    const grupo = String(row[idxGrupo] ?? "").trim();
+    return {
+      Grupo: curso ? `${curso} ${grupo}` : grupo,
+      Documento: String(row[idxDocumento] ?? "").trim(),
+      Nombre: String(row[idxNombre] ?? "").trim()
+    };
+  }).filter((r) => r.Grupo || r.Documento || r.Nombre);
 }
 
 async function detectarCamaras() {
@@ -1202,13 +1211,14 @@ function bindEvents() {
     const file = ev.target.files?.[0];
     if (!file) return;
     const isXlsx = /\.xlsx?$/i.test(file.name);
+    const esSecundaria = $("nivel").value === "secundaria";
     try {
       if (isXlsx) {
         const buffer = await file.arrayBuffer();
-        state.rows = parseXLSX(buffer);
+        state.rows = parseXLSX(buffer, esSecundaria);
       } else {
         const text = await file.text();
-        state.rows = parseCSV(text);
+        state.rows = parseCSV(text, esSecundaria);
       }
     } catch (err) {
       return toast(err.message, "error", 5000);
