@@ -41,18 +41,22 @@ const state = {
 const helpText = {
   "panel-info":        { title: "Información general",     body: "Muestra resumen del grupo: cuántos estudiantes hay, cuántos tienen foto y el progreso general." },
   "ultima-foto":       { title: "Última foto tomada",      body: "Presenta una miniatura de la foto más reciente y el nombre/documento del estudiante asociado." },
+  "nivel":             { title: "Nivel educativo",         body: "Selecciona Primaria o Secundaria. Cada nivel guarda su propia URL de datos. El formato de Secundaria incluye el campo 'Jura. Band.' que no está en Primaria." },
   "activar-camara":    { title: "Activar cámara",          body: "Solicita permisos de cámara al navegador y habilita la vista previa en tiempo real." },
-  "cargar-csv":        { title: "Cargar archivo CSV",      body: "Lee un CSV local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes." },
+  "cargar-csv":        { title: "Cargar archivo de datos", body: "Lee un archivo CSV o XLSX local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes. Soporta el formato de exportación SIGED." },
   "seleccionar-grupo": { title: "Seleccionar grupo",       body: "Filtra estudiantes por grupo y reinicia la vista para trabajar solo con ese grupo." },
   "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara y genera dos versiones: 100×100 px para SIGED y 1080×1080 px en alta resolución (nombre_apellido_cédula)." },
   "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP con dos carpetas: SIGED (100×100) e imágenes de estudiantes alta resolución (1080×1080)." },
-  "cargar-url":        { title: "URL fija del CSV",        body: "Pega el link de tu Google Sheets (compartido como público) o de un archivo CSV en GitHub Raw. La app convierte el link automáticamente y guarda la URL en el navegador para cargarla sola la próxima vez." }
+  "cargar-url":        { title: "URL fija de datos",       body: "Pega el link de tu Google Sheets, un archivo XLSX en Google Drive, o un CSV en GitHub Raw. La app convierte el link automáticamente y guarda la URL por nivel (Primaria/Secundaria) en el navegador." }
 };
 
 const $ = (id) => document.getElementById(id);
-const STORAGE_URL_KEY    = "siged_csv_url";
+const STORAGE_URL_KEY    = "siged_csv_url"; // legacy — migrated to per-level keys
 const STORAGE_FOTOS_KEY  = "siged_fotos";
 const STORAGE_GCLIENT_KEY = "siged_google_client_id";
+const STORAGE_NIVEL_KEY   = "siged_nivel";
+const STORAGE_URL_PRIMARIA   = "siged_url_primaria";
+const STORAGE_URL_SECUNDARIA = "siged_url_secundaria";
 const DRIVE_ROOT          = "SIGED Fotos";
 const DEFAULT_CLIENT_ID   = "263672487463-bf0e1fn8k66tnvsfld7dtnmmd5ag6t46.apps.googleusercontent.com";
 let tokenClient = null;
@@ -72,16 +76,30 @@ function generarNombreHD(nombre, documento) {
 }
 
 /* ── URL helpers ──────────────────────────────────── */
+function esFormatoXlsx(url) {
+  url = url.trim();
+  if (url.match(/\/spreadsheets\/d\//)) return true;
+  if (url.match(/drive\.google\.com\/file\/d\//)) return true;
+  if (url.match(/\.xlsx$/i) || url.match(/\.xls$/i)) return true;
+  return false;
+}
+
 function normalizarUrl(url) {
   url = url.trim();
 
-  // Google Sheets: cualquier URL de edición/vista → URL de exportación CSV
+  // Google Sheets: exportar como XLSX para preservar formato de cabeceras
   const sheetsMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
   if (sheetsMatch) {
     const id = sheetsMatch[1];
     const gidMatch = url.match(/[#?&]gid=(\d+)/);
     const gid = gidMatch ? `&gid=${gidMatch[1]}` : "";
-    return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv${gid}`;
+    return `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx${gid}`;
+  }
+
+  // Google Drive: archivo directo → URL de descarga
+  const driveMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (driveMatch) {
+    return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
   }
 
   // GitHub: URL de blob → URL raw
@@ -91,6 +109,11 @@ function normalizarUrl(url) {
   }
 
   return url;
+}
+
+function obtenerUrlKeyNivel() {
+  const nivel = $("nivel")?.value;
+  return nivel === "secundaria" ? STORAGE_URL_SECUNDARIA : STORAGE_URL_PRIMARIA;
 }
 
 function actualizarStatusUrl(url) {
@@ -449,25 +472,47 @@ async function sincronizarFotosDeDrive(grupoNombre) {
 }
 
 async function cargarDesdeUrl(url, silencioso = false) {
+  const xlsx = esFormatoXlsx(url);
   const urlFinal = normalizarUrl(url);
-  if (!silencioso) toast("Cargando CSV desde URL…", "info", 2000);
+  if (!silencioso) toast("Cargando datos desde URL…", "info", 2000);
   try {
-    const res = await fetch(urlFinal);
+    let res;
+    // Para archivos de Google Drive, usar Drive API si hay sesión activa
+    const driveFileMatch = url.trim().match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (driveFileMatch && state.driveToken) {
+      res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveFileMatch[1]}?alt=media`, {
+        headers: { Authorization: `Bearer ${state.driveToken}` }
+      });
+    } else {
+      res = await fetch(urlFinal);
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
-    state.rows = parseCSV(text);
+
+    if (xlsx) {
+      const buffer = await res.arrayBuffer();
+      state.rows = parseXLSX(buffer);
+    } else {
+      const text = await res.text();
+      state.rows = parseCSV(text);
+    }
+
     state.groups = [...new Set(state.rows.map((r) => String(r.Grupo).trim()))].filter(Boolean).sort();
     $("grupo").innerHTML = state.groups.map((g) => `<option value="${g}">${g}</option>`).join("");
     if (state.groups.length) {
       $("grupo").value = state.groups[0];
       seleccionarGrupo();
     }
-    localStorage.setItem(STORAGE_URL_KEY, url);
+    const key = obtenerUrlKeyNivel();
+    localStorage.setItem(key, url);
     $("csv-url").value = url;
     actualizarStatusUrl(url);
-    toast(`CSV cargado: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "success");
+    toast(`Datos cargados: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "success");
   } catch (err) {
-    toast(`No se pudo cargar el CSV: ${err.message}`, "error", 6000);
+    if (url.match(/drive\.google\.com\/file\/d\//) && !state.driveToken) {
+      toast("Para archivos de Google Drive, inicia sesión con Google primero o sube el archivo directamente.", "error", 8000);
+    } else {
+      toast(`No se pudo cargar los datos: ${err.message}`, "error", 6000);
+    }
   }
 }
 
@@ -514,6 +559,35 @@ function parseCSV(text) {
       Nombre: cols[idxNombre] ?? ""
     };
   }).filter((r) => r.Grupo || r.Documento || r.Nombre);
+}
+
+/* ── XLSX parser (SheetJS) ───────────────────────── */
+function parseXLSX(data) {
+  if (typeof XLSX === "undefined") {
+    throw new Error("La librería XLSX no está disponible. Recarga la página.");
+  }
+  const workbook = XLSX.read(data, { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+  // Saltar las 2 primeras filas (título + categorías), igual que CSV
+  const useful = allRows.slice(2);
+  if (!useful.length) return [];
+
+  const headers = useful[0].map((h) => String(h).trim());
+  const idxGrupo = headers.indexOf("Grupo");
+  const idxDocumento = headers.indexOf("Documento");
+  const idxNombre = headers.indexOf("Nombre");
+
+  if ([idxGrupo, idxDocumento, idxNombre].some((idx) => idx < 0)) {
+    throw new Error("Archivo inválido: requiere columnas Grupo, Documento y Nombre.");
+  }
+
+  return useful.slice(1).map((row) => ({
+    Grupo: String(row[idxGrupo] ?? "").trim(),
+    Documento: String(row[idxDocumento] ?? "").trim(),
+    Nombre: String(row[idxNombre] ?? "").trim()
+  })).filter((r) => r.Grupo || r.Documento || r.Nombre);
 }
 
 async function detectarCamaras() {
@@ -1127,9 +1201,15 @@ function bindEvents() {
   $("csv-file").onchange = async (ev) => {
     const file = ev.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
+    const isXlsx = /\.xlsx?$/i.test(file.name);
     try {
-      state.rows = parseCSV(text);
+      if (isXlsx) {
+        const buffer = await file.arrayBuffer();
+        state.rows = parseXLSX(buffer);
+      } else {
+        const text = await file.text();
+        state.rows = parseCSV(text);
+      }
     } catch (err) {
       return toast(err.message, "error", 5000);
     }
@@ -1138,7 +1218,7 @@ function bindEvents() {
     if (state.groups.length) {
       $("grupo").value = state.groups[0];
       seleccionarGrupo();
-      toast(`CSV cargado: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "info");
+      toast(`Datos cargados: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "info");
     }
   };
 
@@ -1149,10 +1229,36 @@ function bindEvents() {
   };
 
   $("btn-olvidar-url").onclick = () => {
-    localStorage.removeItem(STORAGE_URL_KEY);
+    const key = obtenerUrlKeyNivel();
+    localStorage.removeItem(key);
     $("csv-url").value = "";
     actualizarStatusUrl(null);
-    toast("URL eliminada del navegador.", "info");
+    const nivel = $("nivel").value === "secundaria" ? "Secundaria" : "Primaria";
+    toast(`URL de ${nivel} eliminada del navegador.`, "info");
+  };
+
+  $("nivel").onchange = () => {
+    const nivel = $("nivel").value;
+    localStorage.setItem(STORAGE_NIVEL_KEY, nivel);
+    const key = obtenerUrlKeyNivel();
+    const savedUrl = localStorage.getItem(key);
+    $("csv-url").value = savedUrl || "";
+    actualizarStatusUrl(savedUrl);
+    if (savedUrl) {
+      cargarDesdeUrl(savedUrl, true);
+    } else {
+      state.rows = [];
+      state.groups = [];
+      state.grupoActual = "";
+      state.estudiantes = [];
+      state.seleccion = null;
+      $("grupo").innerHTML = "";
+      $("grupo-actual").textContent = "No seleccionado";
+      $("estudiantes").innerHTML = "";
+      actualizarPendientesYStats();
+      actualizarStudentPreview();
+      $("estudiante-actual").textContent = "Estudiante: Ninguno seleccionado";
+    }
   };
 
   $("btn-limpiar-sesion").onclick = limpiarSesion;
@@ -1206,8 +1312,22 @@ function bindEvents() {
   await restaurarSesionHD();
   actualizarInfoSesion();
 
-  // Restaurar URL guardada y auto-cargar CSV
-  const savedUrl = localStorage.getItem(STORAGE_URL_KEY);
+  // Migrar URL legacy a per-level (una sola vez)
+  const legacyUrl = localStorage.getItem(STORAGE_URL_KEY);
+  if (legacyUrl) {
+    if (!localStorage.getItem(STORAGE_URL_PRIMARIA)) {
+      localStorage.setItem(STORAGE_URL_PRIMARIA, legacyUrl);
+    }
+    localStorage.removeItem(STORAGE_URL_KEY);
+  }
+
+  // Restaurar nivel guardado
+  const savedNivel = localStorage.getItem(STORAGE_NIVEL_KEY);
+  if (savedNivel) $("nivel").value = savedNivel;
+
+  // Restaurar URL del nivel actual y auto-cargar datos
+  const urlKey = obtenerUrlKeyNivel();
+  const savedUrl = localStorage.getItem(urlKey);
   if (savedUrl) {
     $("csv-url").value = savedUrl;
     actualizarStatusUrl(savedUrl);
