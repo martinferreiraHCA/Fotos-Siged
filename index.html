@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://accounts.google.com/gsi/client"></script>
   </head>
   <body>
@@ -126,6 +127,19 @@
         <section class="controls card-soft">
           <div class="controls-grid">
             <div class="field">
+              <label for="nivel">Nivel
+                <span class="field-badge">Primaria &middot; Secundaria</span>
+              </label>
+              <div class="field-inline">
+                <select id="nivel">
+                  <option value="primaria">Primaria</option>
+                  <option value="secundaria">Secundaria</option>
+                </select>
+                <button class="help-btn" data-help="nivel" aria-label="Ayuda sobre nivel">?</button>
+              </div>
+            </div>
+
+            <div class="field">
               <label for="camara">C&aacute;mara</label>
               <div class="field-inline">
                 <select id="camara"></select>
@@ -134,21 +148,23 @@
               </div>
             </div>
 
-            <div class="field">
-              <label for="csv-file">Archivo CSV local</label>
+            <div class="field field--full">
+              <label for="csv-file">Archivo de datos
+                <span class="field-badge">CSV &middot; XLSX</span>
+              </label>
               <div class="field-inline">
-                <input id="csv-file" type="file" accept=".csv,text/csv" />
-                <button class="help-btn" data-help="cargar-csv" aria-label="Ayuda para cargar CSV">?</button>
+                <input id="csv-file" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+                <button class="help-btn" data-help="cargar-csv" aria-label="Ayuda para cargar archivo">?</button>
               </div>
             </div>
 
             <div class="field field--full">
               <label for="csv-url">
-                URL fija del CSV
-                <span class="field-badge">Google Sheets &middot; GitHub Raw</span>
+                URL fija de datos
+                <span class="field-badge">Google Sheets &middot; Google Drive &middot; GitHub</span>
               </label>
               <div class="field-inline">
-                <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/..." />
+                <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/... o link de archivo en Drive" />
                 <button id="btn-cargar-url">Cargar URL</button>
                 <button id="btn-olvidar-url" class="btn-secondary" title="Quitar URL guardada" hidden>✕</button>
                 <button class="help-btn" data-help="cargar-url" aria-label="Ayuda para cargar desde URL">?</button>
