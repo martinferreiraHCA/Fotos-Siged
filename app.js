@@ -3,6 +3,12 @@ const PHOTO_HEIGHT = 100;
 const HD_WIDTH = 1080;
 const HD_HEIGHT = 1080;
 const HD_FOLDER_NAME = "imagenes de estudiantes alta resolución";
+// Versión de peso reducido (tamaño promedio) nombrada solo con la cédula,
+// pensada para subir a sistemas externos sin sobrecargarlos.
+const MID_WIDTH = 600;
+const MID_HEIGHT = 600;
+const MID_QUALITY = 0.8;
+const CEDULA_FOLDER_NAME = "imagenes por cédula";
 
 /* ── Toast notifications ──────────────────────────── */
 function toast(message, type = "info", duration = 3200) {
@@ -26,6 +32,7 @@ const state = {
   seleccion: null,
   fotos: new Map(), // documento => dataURL (100x100)
   fotosHD: new Map(), // documento => dataURL (1080x1080)
+  fotosCedula: new Map(), // documento => dataURL (600x600, peso reducido)
   stream: null,
   currentDevices: [],
   // Google Drive
@@ -35,7 +42,9 @@ const state = {
   driveGrupoId:  null,
   driveFiles:    new Map(), // documento => fileId en Drive
   driveHDFolderId: null,
-  driveHDGrupoId:  null
+  driveHDGrupoId:  null,
+  driveCedulaFolderId: null,
+  driveCedulaGrupoId:  null
 };
 
 const helpText = {
@@ -45,8 +54,8 @@ const helpText = {
   "activar-camara":    { title: "Activar cámara",          body: "Solicita permisos de cámara al navegador y habilita la vista previa en tiempo real." },
   "cargar-csv":        { title: "Cargar archivo de datos", body: "Lee un archivo CSV o XLSX local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes. Soporta el formato de exportación SIGED." },
   "seleccionar-grupo": { title: "Seleccionar grupo",       body: "Filtra estudiantes por grupo y reinicia la vista para trabajar solo con ese grupo." },
-  "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara y genera dos versiones: 100×100 px para SIGED y 1080×1080 px en alta resolución (nombre_apellido_cédula)." },
-  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP con dos carpetas: SIGED (100×100) e imágenes de estudiantes alta resolución (1080×1080)." },
+  "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara y genera tres versiones: 100×100 px para SIGED, 1080×1080 px en alta resolución (nombre_apellido_cédula) y 600×600 px de peso reducido nombrada solo con la cédula." },
+  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP con tres carpetas: SIGED (100×100), imágenes de estudiantes alta resolución (1080×1080) e imágenes por cédula (600×600, peso reducido para subir a otros sistemas)." },
   "cargar-url":        { title: "URL fija de datos",       body: "Pega el link de tu Google Sheets, un archivo XLSX en Google Drive, o un CSV en GitHub Raw. La app convierte el link automáticamente y guarda la URL por nivel (Primaria/Secundaria) en el navegador." }
 };
 
@@ -63,6 +72,23 @@ let tokenClient = null;
 
 function sanitizeDoc(value) {
   return String(value ?? "").replace(/[.-]/g, "").trim();
+}
+
+// Genera una versión de peso reducido (MID_WIDTH x MID_HEIGHT JPEG) a partir
+// de un dataURL existente. Útil para fotos capturadas antes de esta versión.
+function generarVersionCedula(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = MID_WIDTH;
+      c.height = MID_HEIGHT;
+      c.getContext("2d").drawImage(img, 0, 0, MID_WIDTH, MID_HEIGHT);
+      resolve(c.toDataURL("image/jpeg", MID_QUALITY));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
 }
 
 function generarNombreHD(nombre, documento) {
@@ -171,6 +197,7 @@ function limpiarSesion() {
   if (!confirm(`¿Borrar las ${state.fotos.size} fotos guardadas en este navegador? Esta acción no se puede deshacer.`)) return;
   state.fotos.clear();
   state.fotosHD.clear();
+  state.fotosCedula.clear();
   localStorage.removeItem(STORAGE_FOTOS_KEY);
   limpiarSesionHD();
   actualizarInfoSesion();
@@ -182,12 +209,14 @@ function limpiarSesion() {
   toast("Sesión limpiada. Todas las fotos borradas del navegador.", "info");
 }
 
-/* ── IndexedDB para fotos HD ─────────────────────── */
+/* ── IndexedDB para fotos HD y por cédula ────────── */
 function abrirDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("siged_fotos_hd", 1);
+    const req = indexedDB.open("siged_fotos_hd", 2);
     req.onupgradeneeded = (e) => {
-      e.target.result.createObjectStore("fotos_hd");
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("fotos_hd")) db.createObjectStore("fotos_hd");
+      if (!db.objectStoreNames.contains("fotos_cedula")) db.createObjectStore("fotos_cedula");
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -197,9 +226,11 @@ function abrirDB() {
 async function guardarSesionHD() {
   try {
     const db = await abrirDB();
-    const tx = db.transaction("fotos_hd", "readwrite");
-    const store = tx.objectStore("fotos_hd");
-    state.fotosHD.forEach((v, k) => store.put(v, k));
+    const tx = db.transaction(["fotos_hd", "fotos_cedula"], "readwrite");
+    const storeHD = tx.objectStore("fotos_hd");
+    state.fotosHD.forEach((v, k) => storeHD.put(v, k));
+    const storeCedula = tx.objectStore("fotos_cedula");
+    state.fotosCedula.forEach((v, k) => storeCedula.put(v, k));
     await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
     db.close();
   } catch { /* IndexedDB no disponible — ignorar */ }
@@ -208,13 +239,17 @@ async function guardarSesionHD() {
 async function restaurarSesionHD() {
   try {
     const db = await abrirDB();
-    const tx = db.transaction("fotos_hd", "readonly");
-    const store = tx.objectStore("fotos_hd");
-    const reqAll = store.getAll();
-    const reqKeys = store.getAllKeys();
+    const tx = db.transaction(["fotos_hd", "fotos_cedula"], "readonly");
+    const reqHDAll = tx.objectStore("fotos_hd").getAll();
+    const reqHDKeys = tx.objectStore("fotos_hd").getAllKeys();
+    const reqCedAll = tx.objectStore("fotos_cedula").getAll();
+    const reqCedKeys = tx.objectStore("fotos_cedula").getAllKeys();
     await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
-    for (let i = 0; i < reqKeys.result.length; i++) {
-      state.fotosHD.set(reqKeys.result[i], reqAll.result[i]);
+    for (let i = 0; i < reqHDKeys.result.length; i++) {
+      state.fotosHD.set(reqHDKeys.result[i], reqHDAll.result[i]);
+    }
+    for (let i = 0; i < reqCedKeys.result.length; i++) {
+      state.fotosCedula.set(reqCedKeys.result[i], reqCedAll.result[i]);
     }
     db.close();
   } catch { /* IndexedDB no disponible — ignorar */ }
@@ -223,8 +258,9 @@ async function restaurarSesionHD() {
 async function limpiarSesionHD() {
   try {
     const db = await abrirDB();
-    const tx = db.transaction("fotos_hd", "readwrite");
+    const tx = db.transaction(["fotos_hd", "fotos_cedula"], "readwrite");
     tx.objectStore("fotos_hd").clear();
+    tx.objectStore("fotos_cedula").clear();
     await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
     db.close();
   } catch { /* IndexedDB no disponible — ignorar */ }
@@ -289,6 +325,8 @@ function logoutGoogle() {
   state.driveGrupoId  = null;
   state.driveHDFolderId = null;
   state.driveHDGrupoId  = null;
+  state.driveCedulaFolderId = null;
+  state.driveCedulaGrupoId  = null;
   state.driveFiles.clear();
   actualizarUIUsuario();
   toast("Sesión de Google cerrada.", "info");
@@ -400,6 +438,22 @@ async function subirFotoHDADrive(doc, nombre, dataUrl) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+async function subirFotoCedulaADrive(doc, dataUrl) {
+  if (!state.driveToken || !state.driveCedulaGrupoId) return;
+
+  const blob = base64ToBlob(dataUrl.split(",")[1], "image/jpeg");
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify({
+    name: `${doc}.jpg`, parents: [state.driveCedulaGrupoId]
+  })], { type: "application/json" }));
+  form.append("file", blob);
+  const res = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+    { method: "POST", headers: { Authorization: `Bearer ${state.driveToken}` }, body: form }
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 function actualizarDrivePanel() {
   const panel = $("drive-panel");
   if (!state.driveToken) {
@@ -443,6 +497,10 @@ async function sincronizarFotosDeDrive(grupoNombre) {
       state.driveHDFolderId = await encontrarOCrearCarpeta(HD_FOLDER_NAME, state.driveFolderId);
     }
     state.driveHDGrupoId = await encontrarOCrearCarpeta(grupoNombre, state.driveHDFolderId);
+    if (!state.driveCedulaFolderId) {
+      state.driveCedulaFolderId = await encontrarOCrearCarpeta(CEDULA_FOLDER_NAME, state.driveFolderId);
+    }
+    state.driveCedulaGrupoId = await encontrarOCrearCarpeta(grupoNombre, state.driveCedulaFolderId);
     state.driveFiles.clear();
     actualizarDrivePanel();
 
@@ -722,6 +780,7 @@ function seleccionarGrupo() {
   const grp = $("grupo").value;
   state.grupoActual = grp;
   state.driveHDGrupoId = null;
+  state.driveCedulaGrupoId = null;
   state.estudiantes = state.rows.filter((r) => String(r.Grupo).trim() === grp.trim());
   state.seleccion = null;
   $("grupo-actual").textContent = grp || "No seleccionado";
@@ -871,9 +930,17 @@ function guardarFoto() {
   outHD.getContext("2d").drawImage(canvas, sx, sy, cropSize, cropSize, 0, 0, HD_WIDTH, HD_HEIGHT);
   const dataUrlHD = outHD.toDataURL("image/jpeg", 0.92);
 
+  // Por cédula: 600x600 JPEG de peso reducido (center-cropped)
+  const outMid = document.createElement("canvas");
+  outMid.width = MID_WIDTH;
+  outMid.height = MID_HEIGHT;
+  outMid.getContext("2d").drawImage(canvas, sx, sy, cropSize, cropSize, 0, 0, MID_WIDTH, MID_HEIGHT);
+  const dataUrlMid = outMid.toDataURL("image/jpeg", MID_QUALITY);
+
   const doc = sanitizeDoc(state.seleccion.Documento);
   state.fotos.set(doc, dataUrl);
   state.fotosHD.set(doc, dataUrlHD);
+  state.fotosCedula.set(doc, dataUrlMid);
 
   const ultima = $("ultima-foto").getContext("2d");
   const img = new Image();
@@ -913,10 +980,17 @@ function guardarFoto() {
         if (!state.driveHDGrupoId && state.grupoActual) {
           state.driveHDGrupoId = await encontrarOCrearCarpeta(state.grupoActual, state.driveHDFolderId);
         }
-        // Subir ambas fotos en paralelo (las carpetas ya existen)
+        if (!state.driveCedulaFolderId) {
+          state.driveCedulaFolderId = await encontrarOCrearCarpeta(CEDULA_FOLDER_NAME, state.driveFolderId);
+        }
+        if (!state.driveCedulaGrupoId && state.grupoActual) {
+          state.driveCedulaGrupoId = await encontrarOCrearCarpeta(state.grupoActual, state.driveCedulaFolderId);
+        }
+        // Subir las tres fotos en paralelo (las carpetas ya existen)
         await Promise.all([
           subirFotoADrive(doc, dataUrl),
-          subirFotoHDADrive(doc, nombreEst, dataUrlHD)
+          subirFotoHDADrive(doc, nombreEst, dataUrlHD),
+          subirFotoCedulaADrive(doc, dataUrlMid)
         ]);
         actualizarStudentPreview();
         actualizarDrivePanel();
@@ -968,7 +1042,9 @@ async function comprimirGrupo() {
   const zip = new JSZip();
   const folderSiged = zip.folder("SIGED");
   const folderHD = zip.folder(HD_FOLDER_NAME);
+  const folderCedula = zip.folder(CEDULA_FOLDER_NAME);
   let countHD = 0;
+  let countCedula = 0;
   for (const e of state.estudiantes) {
     const doc = sanitizeDoc(e.Documento);
     if (!state.fotos.has(doc)) continue;
@@ -982,11 +1058,25 @@ async function comprimirGrupo() {
       folderHD.file(`${nombreArchivo}.jpg`, dataHD, { base64: true });
       countHD++;
     }
+    // Por cédula: 600x600 JPEG de peso reducido nombrada solo con la cédula.
+    // Si la foto se capturó antes de esta versión, la derivamos de la HD (o la SIGED).
+    if (!state.fotosCedula.has(doc)) {
+      const fuente = state.fotosHD.get(doc) ?? state.fotos.get(doc);
+      try { state.fotosCedula.set(doc, await generarVersionCedula(fuente)); } catch { /* ignorar */ }
+    }
+    if (state.fotosCedula.has(doc)) {
+      const dataCedula = state.fotosCedula.get(doc).split(",")[1];
+      folderCedula.file(`${doc}.jpg`, dataCedula, { base64: true });
+      countCedula++;
+    }
   }
   const blob = await zip.generateAsync({ type: "blob" });
   downloadBlob(`${state.grupoActual}.zip`, blob);
-  const hdMsg = countHD > 0 ? ` (+ ${countHD} HD)` : "";
-  toast(`ZIP generado: ${state.grupoActual}.zip${hdMsg}`, "success");
+  const extras = [];
+  if (countHD > 0) extras.push(`${countHD} HD`);
+  if (countCedula > 0) extras.push(`${countCedula} por cédula`);
+  const extraMsg = extras.length ? ` (+ ${extras.join(", ")})` : "";
+  toast(`ZIP generado: ${state.grupoActual}.zip${extraMsg}`, "success");
 }
 
 function generarPdfAsistencia() {
