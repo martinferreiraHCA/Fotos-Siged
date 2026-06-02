@@ -6,10 +6,13 @@ Aplicación web 100% cliente para gestionar fotos estudiantiles directamente des
 
 - Carga un CSV con columnas `Grupo`, `Documento`, `Nombre` (saltando las 2 primeras filas, como en tu script).
 - Detecta cámaras y permite vista previa en vivo.
-- Permite seleccionar estudiante, tomar foto y guardarla en memoria (100x100 px).
+- Permite seleccionar estudiante, tomar foto y guardar tres versiones en memoria:
+  - 100x100 px para SIGED (nombrada por documento).
+  - 1080x1080 px en alta resolución (nombrada `nombre_apellido_cédula`).
+  - 600x600 px de peso reducido (nombrada solo con la cédula) para subir a otros sistemas sin sobrecargarlos.
 - Muestra progreso, pendientes y última foto.
 - Exporta:
-  - ZIP con fotos del grupo actual.
+  - ZIP con fotos del grupo actual, en tres carpetas: `SIGED`, `imagenes de estudiantes alta resolución` e `imagenes por cédula`.
   - PDF de asistencia.
   - PDF de estado con gráfico.
   - PDF de todos los grupos.
