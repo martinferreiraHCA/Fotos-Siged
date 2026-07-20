@@ -837,6 +837,11 @@ async function detectarCamaras() {
       }
     });
   } catch { /* enumerateDevices no disponible */ }
+
+  // En teléfonos/tablets las fotos se toman con la cámara trasera
+  const esMovil = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && matchMedia("(pointer: coarse)").matches);
+  select.value = esMovil ? "environment" : "user";
 }
 
 async function activarCamara() {
@@ -871,7 +876,10 @@ async function activarCamara() {
     video: videoConstraints,
     audio: false
   });
-  $("preview").srcObject = state.stream;
+  const preview = $("preview");
+  preview.srcObject = state.stream;
+  // iOS a veces no arranca el video solo con autoplay
+  preview.play?.().catch(() => {});
 
   // Re-detectar cámaras ahora que el permiso fue otorgado (labels disponibles)
   const prev = selected;
