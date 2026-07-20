@@ -161,27 +161,57 @@ function actualizarStatusUrl(url) {
   }
 }
 
-/* ── Persistencia de sesión (fotos en localStorage) ── */
-function guardarSesion() {
+/* ── Persistencia de sesión (fotos en IndexedDB) ──── */
+// Las miniaturas SIGED vivían en localStorage, cuyo límite (~5 MB) se
+// llenaba con grupos grandes ("Almacenamiento lleno"). Ahora van a
+// IndexedDB como las HD; localStorage queda solo como fallback y como
+// origen de migración de sesiones viejas.
+async function guardarSesion() {
   try {
-    const obj = {};
-    state.fotos.forEach((v, k) => { obj[k] = v; });
-    localStorage.setItem(STORAGE_FOTOS_KEY, JSON.stringify(obj));
-    actualizarInfoSesion();
+    const db = await abrirDB();
+    const tx = db.transaction("fotos_siged", "readwrite");
+    const store = tx.objectStore("fotos_siged");
+    state.fotos.forEach((v, k) => store.put(v, k));
+    await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
+    db.close();
   } catch {
-    toast("Almacenamiento lleno. Exporta el ZIP y libera espacio.", "error", 5000);
+    // IndexedDB no disponible (modo privado muy restrictivo, etc.)
+    try {
+      const obj = {};
+      state.fotos.forEach((v, k) => { obj[k] = v; });
+      localStorage.setItem(STORAGE_FOTOS_KEY, JSON.stringify(obj));
+    } catch {
+      toast("El almacenamiento del navegador está lleno. Genera el ZIP para no perder las fotos y luego usa \"Limpiar sesión\".", "error", 7000);
+    }
   }
+  actualizarInfoSesion();
 }
 
-function restaurarSesion() {
+async function restaurarSesion() {
+  // Fotos de versiones anteriores guardadas en localStorage
+  let legacy = {};
   try {
-    const raw = localStorage.getItem(STORAGE_FOTOS_KEY);
-    if (!raw) return;
-    const obj = JSON.parse(raw);
-    Object.entries(obj).forEach(([k, v]) => state.fotos.set(k, v));
-  } catch {
-    // datos corruptos — ignorar silenciosamente
-  }
+    legacy = JSON.parse(localStorage.getItem(STORAGE_FOTOS_KEY) ?? "{}");
+  } catch { /* datos corruptos — ignorar */ }
+  Object.entries(legacy).forEach(([k, v]) => state.fotos.set(k, v));
+
+  try {
+    const db = await abrirDB();
+    const tx = db.transaction("fotos_siged", "readonly");
+    const reqAll = tx.objectStore("fotos_siged").getAll();
+    const reqKeys = tx.objectStore("fotos_siged").getAllKeys();
+    await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
+    db.close();
+    for (let i = 0; i < reqKeys.result.length; i++) {
+      if (!state.fotos.has(reqKeys.result[i])) state.fotos.set(reqKeys.result[i], reqAll.result[i]);
+    }
+    // Migrar lo legacy a IndexedDB y liberar localStorage, que era lo que
+    // provocaba el error de almacenamiento lleno.
+    if (Object.keys(legacy).length) {
+      await guardarSesion();
+      localStorage.removeItem(STORAGE_FOTOS_KEY);
+    }
+  } catch { /* IndexedDB no disponible — seguir con lo cargado de localStorage */ }
 }
 
 function actualizarInfoSesion() {
@@ -217,11 +247,12 @@ function limpiarSesion() {
 /* ── IndexedDB para fotos HD y por cédula ────────── */
 function abrirDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("siged_fotos_hd", 2);
+    const req = indexedDB.open("siged_fotos_hd", 3);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains("fotos_hd")) db.createObjectStore("fotos_hd");
       if (!db.objectStoreNames.contains("fotos_cedula")) db.createObjectStore("fotos_cedula");
+      if (!db.objectStoreNames.contains("fotos_siged")) db.createObjectStore("fotos_siged");
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -263,9 +294,10 @@ async function restaurarSesionHD() {
 async function limpiarSesionHD() {
   try {
     const db = await abrirDB();
-    const tx = db.transaction(["fotos_hd", "fotos_cedula"], "readwrite");
+    const tx = db.transaction(["fotos_hd", "fotos_cedula", "fotos_siged"], "readwrite");
     tx.objectStore("fotos_hd").clear();
     tx.objectStore("fotos_cedula").clear();
+    tx.objectStore("fotos_siged").clear();
     await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
     db.close();
   } catch { /* IndexedDB no disponible — ignorar */ }
@@ -1476,7 +1508,7 @@ function bindEvents() {
   initHelp();
 
   // Restaurar fotos guardadas en el navegador
-  restaurarSesion();
+  await restaurarSesion();
   await restaurarSesionHD();
   actualizarInfoSesion();
 
