@@ -422,6 +422,9 @@ async function loginConGoogle() {
   try {
     // "consent" siempre muestra la pantalla de permisos → más confiable
     await solicitarToken("consent");
+    // Probar el acceso real a Drive antes de dar la conexión por buena;
+    // si faltan permisos, driveFetch revoca el token y los vuelve a pedir.
+    await verificarAccesoDrive();
     await obtenerInfoUsuario().catch(() => {});
     actualizarUIUsuario();
     toast("Google Drive conectado correctamente.", "success");
@@ -466,7 +469,7 @@ const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 // Todas las llamadas a Drive pasan por acá: agrega el token vigente,
 // renueva ante 401, re-pide permisos ante scopes insuficientes y reintenta
 // con backoff exponencial ante errores de red, límite de peticiones o 5xx.
-async function driveFetch(url, init = {}, reintentos = 3) {
+async function driveFetch(url, init = {}, reintentos = 3, repararScopes = true) {
   let ultimoError = null;
   for (let intento = 0; intento <= reintentos; intento++) {
     if (intento > 0) await esperar(Math.min(1000 * 2 ** (intento - 1), 8000));
@@ -490,16 +493,21 @@ async function driveFetch(url, init = {}, reintentos = 3) {
       ultimoError = new Error("La sesión de Google expiró y no se pudo renovar.");
       continue;
     }
-    if (res.status === 403 && /insufficient|scope/i.test(mensaje)) {
-      // El token existe pero sin permiso de Drive (consentimiento incompleto):
-      // volver a pedir permisos mostrando la pantalla de Google.
+    if (res.status === 403 && repararScopes && /insufficient|scope/i.test(mensaje)) {
+      // El token existe pero sin permiso de Drive (consentimiento incompleto).
+      // Revocarlo es clave: si no, Google puede devolver el mismo token
+      // defectuoso desde caché en el siguiente intento.
+      const tokenMalo = state.driveToken;
       state.driveToken = null;
       state.driveTokenExpira = 0;
+      if (tokenMalo) {
+        try { google.accounts.oauth2.revoke(tokenMalo, () => {}); } catch { /* ignorar */ }
+      }
       try {
         await solicitarToken("consent");
         continue;
       } catch {
-        throw new Error('Faltan permisos de Google Drive. Pulsa "Conectar Drive" y deja marcada la casilla de acceso a Drive en la pantalla de Google.');
+        throw new Error('Faltan permisos de Google Drive. Pulsa "Conectar Drive" y, en la pantalla de Google, deja marcada la casilla "Ver y administrar los archivos de Google Drive que abriste o creaste con esta app".');
       }
     }
     if (res.status === 403 || res.status === 429 || res.status >= 500) {
@@ -509,6 +517,13 @@ async function driveFetch(url, init = {}, reintentos = 3) {
     throw new Error(mensaje);
   }
   throw ultimoError ?? new Error("No se pudo conectar con Google Drive.");
+}
+
+// Llamada de prueba a la API de Drive. Si el token quedó sin el permiso de
+// Drive, driveFetch lo detecta acá mismo (revoca + re-pide consentimiento),
+// en vez de fallar recién al subir la primera foto.
+async function verificarAccesoDrive() {
+  await driveRequest("GET", "files", null, { pageSize: "1", fields: "files(id)", q: "trashed=false" });
 }
 
 async function driveRequest(method, path, body = null, params = {}) {
@@ -692,7 +707,14 @@ async function cargarDesdeUrl(url, silencioso = false) {
     // Para archivos de Google Drive, usar Drive API si hay sesión activa
     const driveFileMatch = url.trim().match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
     if (driveFileMatch && state.driveToken) {
-      res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${driveFileMatch[1]}?alt=media`);
+      // Con el permiso drive.file solo se pueden leer archivos creados por
+      // esta app; si la planilla es ajena, caer al enlace público de descarga.
+      try {
+        res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${driveFileMatch[1]}?alt=media`, {}, 1, false);
+      } catch {
+        res = await fetch(urlFinal);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      }
     } else {
       res = await fetch(urlFinal);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
