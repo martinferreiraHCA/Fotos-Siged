@@ -37,6 +37,7 @@ const state = {
   currentDevices: [],
   // Google Drive
   driveToken:    null,
+  driveTokenExpira: null, // timestamp de vencimiento del token
   driveUser:     null,
   driveFolderId: null,
   driveGrupoId:  null,
@@ -68,7 +69,11 @@ const STORAGE_URL_PRIMARIA   = "siged_url_primaria";
 const STORAGE_URL_SECUNDARIA = "siged_url_secundaria";
 const DRIVE_ROOT          = "SIGED Fotos";
 const DEFAULT_CLIENT_ID   = "263672487463-bf0e1fn8k66tnvsfld7dtnmmd5ag6t46.apps.googleusercontent.com";
+const DRIVE_SCOPE  = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_SCOPES = `${DRIVE_SCOPE} profile email`;
 let tokenClient = null;
+let pendingToken = null;      // solicitud de token en curso { resolve, reject }
+let renovacionEnCurso = null; // promesa compartida para no pedir dos tokens a la vez
 
 function sanitizeDoc(value) {
   return String(value ?? "").replace(/[.-]/g, "").trim();
@@ -274,8 +279,9 @@ function obtenerClientId() {
 function inicializarGIS(clientId) {
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: clientId,
-    scope: "https://www.googleapis.com/auth/drive.file profile email",
+    scope: DRIVE_SCOPES,
     callback: async (response) => {
+      const pend = pendingToken;
       if (response.error) {
         const msgs = {
           popup_closed_by_user: "Cerraste el popup de Google antes de completar el login.",
@@ -283,15 +289,88 @@ function inicializarGIS(clientId) {
           access_denied:         "Acceso denegado. Debes aceptar los permisos de Google Drive.",
           invalid_client:        "Client ID inválido. Revisá la configuración en Google Cloud Console.",
         };
-        toast(msgs[response.error] ?? `Error de autenticación: ${response.error}`, "error", 7000);
+        const msg = msgs[response.error] ?? `Error de autenticación: ${response.error}`;
+        if (pend) pend.reject(new Error(msg));
+        else toast(msg, "error", 7000);
+        return;
+      }
+      // Consentimiento granular: Google permite desmarcar el permiso de Drive
+      // en la pantalla de login. Sin ese permiso toda subida falla con
+      // "insufficient authentication scopes", así que lo verificamos acá.
+      if (!google.accounts.oauth2.hasGrantedAllScopes(response, DRIVE_SCOPE)) {
+        const msg = "Google no otorgó el permiso de Drive. Vuelve a conectar y deja marcada la casilla de acceso a Drive en la pantalla de Google.";
+        if (pend) pend.reject(new Error(msg));
+        else toast(msg, "error", 9000);
         return;
       }
       state.driveToken = response.access_token;
+      // Renovar 2 minutos antes del vencimiento real (~1 hora)
+      const vidaSeg = Math.max((Number(response.expires_in) || 3600) - 120, 60);
+      state.driveTokenExpira = Date.now() + vidaSeg * 1000;
+      if (pend) { pend.resolve(response.access_token); return; }
       await obtenerInfoUsuario().catch(() => {});
       actualizarUIUsuario();
       if (state.grupoActual) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
+    },
+    error_callback: (err) => {
+      const msgs = {
+        popup_closed:          "Cerraste el popup de Google antes de completar el login.",
+        popup_failed_to_open:  "El popup fue bloqueado. Permite ventanas emergentes para este sitio y vuelve a intentarlo.",
+      };
+      const msg = msgs[err?.type] ?? `Error de Google: ${err?.type ?? err?.message ?? "desconocido"}`;
+      if (pendingToken) pendingToken.reject(new Error(msg));
+      else toast(msg, "error", 7000);
     }
   });
+}
+
+// Pide un token a GIS y lo devuelve como promesa. promptMode "" intenta
+// renovar sin popup; "consent" fuerza la pantalla de permisos.
+function solicitarToken(promptMode = "") {
+  if (!window.google?.accounts?.oauth2) {
+    return Promise.reject(new Error("Google Sign-In no está disponible. Recarga la página."));
+  }
+  if (!tokenClient) inicializarGIS(obtenerClientId());
+  return new Promise((resolve, reject) => {
+    const finalizar = (token, err) => {
+      clearTimeout(timer);
+      if (pendingToken?.finalizar === finalizar) pendingToken = null;
+      if (err) reject(err); else resolve(token);
+    };
+    // GIS no siempre invoca el callback (p. ej. popup cerrado por el sistema):
+    // timeout de seguridad para no dejar la promesa colgada.
+    const timer = setTimeout(() => finalizar(null, new Error(
+      promptMode
+        ? "Google no respondió. Revisa que el popup no esté bloqueado y vuelve a intentar."
+        : "No se pudo renovar la sesión de Google en segundo plano."
+    )), promptMode ? 180000 : 20000);
+    if (pendingToken) pendingToken.reject(new Error("Solicitud de token reemplazada por una nueva."));
+    pendingToken = {
+      resolve: (t) => finalizar(t, null),
+      reject: (e) => finalizar(null, e),
+      finalizar
+    };
+    try {
+      tokenClient.requestAccessToken({ prompt: promptMode });
+    } catch (e) {
+      finalizar(null, e);
+    }
+  });
+}
+
+// Garantiza un token vigente antes de cada llamada a Drive: si venció,
+// intenta renovarlo en silencio y, si eso falla, con la pantalla de permisos.
+async function asegurarToken() {
+  if (state.driveToken && Date.now() < (state.driveTokenExpira ?? 0)) return state.driveToken;
+  if (!state.driveToken && state.driveTokenExpira == null) {
+    throw new Error('No hay sesión de Google activa. Pulsa "Conectar Drive".');
+  }
+  if (!renovacionEnCurso) {
+    renovacionEnCurso = solicitarToken("")
+      .catch(() => solicitarToken("consent"))
+      .finally(() => { renovacionEnCurso = null; });
+  }
+  return renovacionEnCurso;
 }
 
 async function obtenerInfoUsuario() {
@@ -301,7 +380,7 @@ async function obtenerInfoUsuario() {
   state.driveUser = await res.json();
 }
 
-function loginConGoogle() {
+async function loginConGoogle() {
   const clientId = obtenerClientId();
   if (!clientId) { $("config-drive-modal").showModal(); return; }
   if (!window.google?.accounts?.oauth2) {
@@ -309,17 +388,21 @@ function loginConGoogle() {
     return;
   }
   try {
-    if (!tokenClient) inicializarGIS(clientId);
     // "consent" siempre muestra la pantalla de permisos → más confiable
-    tokenClient.requestAccessToken({ prompt: "consent" });
+    await solicitarToken("consent");
+    await obtenerInfoUsuario().catch(() => {});
+    actualizarUIUsuario();
+    toast("Google Drive conectado correctamente.", "success");
+    if (state.grupoActual) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
   } catch (e) {
-    toast(`Error al iniciar con Google: ${e.message}`, "error", 7000);
+    toast(e.message, "error", 8000);
   }
 }
 
 function logoutGoogle() {
   if (state.driveToken) google.accounts.oauth2.revoke(state.driveToken, () => {});
   state.driveToken    = null;
+  state.driveTokenExpira = null;
   state.driveUser     = null;
   state.driveFolderId = null;
   state.driveGrupoId  = null;
@@ -346,22 +429,67 @@ function actualizarUIUsuario() {
 }
 
 // ── Drive API helpers ──────────────────────────────
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Todas las llamadas a Drive pasan por acá: agrega el token vigente,
+// renueva ante 401, re-pide permisos ante scopes insuficientes y reintenta
+// con backoff exponencial ante errores de red, límite de peticiones o 5xx.
+async function driveFetch(url, init = {}, reintentos = 3) {
+  let ultimoError = null;
+  for (let intento = 0; intento <= reintentos; intento++) {
+    if (intento > 0) await esperar(Math.min(1000 * 2 ** (intento - 1), 8000));
+    const token = await asegurarToken();
+    let res;
+    try {
+      res = await fetch(url, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` } });
+    } catch {
+      ultimoError = new Error("Sin conexión con Google Drive. Verifica tu internet.");
+      continue;
+    }
+    if (res.ok) return res;
+
+    const cuerpo = await res.json().catch(() => ({}));
+    const mensaje = cuerpo.error?.message ?? `HTTP ${res.status}`;
+
+    if (res.status === 401) {
+      // Token inválido o revocado: forzar renovación en la próxima vuelta
+      state.driveToken = null;
+      state.driveTokenExpira = 0;
+      ultimoError = new Error("La sesión de Google expiró y no se pudo renovar.");
+      continue;
+    }
+    if (res.status === 403 && /insufficient|scope/i.test(mensaje)) {
+      // El token existe pero sin permiso de Drive (consentimiento incompleto):
+      // volver a pedir permisos mostrando la pantalla de Google.
+      state.driveToken = null;
+      state.driveTokenExpira = 0;
+      try {
+        await solicitarToken("consent");
+        continue;
+      } catch {
+        throw new Error('Faltan permisos de Google Drive. Pulsa "Conectar Drive" y deja marcada la casilla de acceso a Drive en la pantalla de Google.');
+      }
+    }
+    if (res.status === 403 || res.status === 429 || res.status >= 500) {
+      ultimoError = new Error(mensaje);
+      continue;
+    }
+    throw new Error(mensaje);
+  }
+  throw ultimoError ?? new Error("No se pudo conectar con Google Drive.");
+}
+
 async function driveRequest(method, path, body = null, params = {}) {
   const url = new URL(`https://www.googleapis.com/drive/v3/${path}`);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  const init = { method, headers: { Authorization: `Bearer ${state.driveToken}` } };
+  const init = { method, headers: {} };
   if (body instanceof FormData) {
     init.body = body;
   } else if (body) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(url.toString(), init);
-  if (res.status === 401) throw new Error("Token expirado. Vuelve a iniciar sesión con Google.");
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message ?? `HTTP ${res.status}`);
-  }
+  const res = await driveFetch(url.toString(), init);
   return res.status !== 204 ? res.json() : null;
 }
 
@@ -400,22 +528,20 @@ async function subirFotoADrive(doc, dataUrl) {
   const blob = base64ToBlob(dataUrl.split(",")[1]);
   const existingId = state.driveFiles.get(doc);
   if (existingId) {
-    const res = await fetch(
+    await driveFetch(
       `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
-      { method: "PATCH", headers: { Authorization: `Bearer ${state.driveToken}`, "Content-Type": "image/png" }, body: blob }
+      { method: "PATCH", headers: { "Content-Type": "image/png" }, body: blob }
     );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } else {
     const form = new FormData();
     form.append("metadata", new Blob([JSON.stringify({
       name: `${doc}.png`, parents: [state.driveGrupoId]
     })], { type: "application/json" }));
     form.append("file", blob);
-    const res = await fetch(
+    const res = await driveFetch(
       "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-      { method: "POST", headers: { Authorization: `Bearer ${state.driveToken}` }, body: form }
+      { method: "POST", body: form }
     );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const file = await res.json();
     if (file.id) state.driveFiles.set(doc, file.id);
   }
@@ -431,11 +557,10 @@ async function subirFotoHDADrive(doc, nombre, dataUrl) {
     name: `${nombreArchivo}.jpg`, parents: [state.driveHDGrupoId]
   })], { type: "application/json" }));
   form.append("file", blob);
-  const res = await fetch(
+  await driveFetch(
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-    { method: "POST", headers: { Authorization: `Bearer ${state.driveToken}` }, body: form }
+    { method: "POST", body: form }
   );
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 async function subirFotoCedulaADrive(doc, dataUrl) {
@@ -447,11 +572,10 @@ async function subirFotoCedulaADrive(doc, dataUrl) {
     name: `${doc}.jpg`, parents: [state.driveCedulaGrupoId]
   })], { type: "application/json" }));
   form.append("file", blob);
-  const res = await fetch(
+  await driveFetch(
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-    { method: "POST", headers: { Authorization: `Bearer ${state.driveToken}` }, body: form }
+    { method: "POST", body: form }
   );
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 function actualizarDrivePanel() {
@@ -512,9 +636,7 @@ async function sincronizarFotosDeDrive(grupoNombre) {
       const doc = file.name.replace(/\.png$/i, "");
       state.driveFiles.set(doc, file.id);
       if (!state.fotos.has(doc)) {
-        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
-          headers: { Authorization: `Bearer ${state.driveToken}` }
-        });
+        const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`);
         state.fotos.set(doc, await blobToDataUrl(await res.blob()));
         nuevas++;
       }
@@ -538,13 +660,11 @@ async function cargarDesdeUrl(url, silencioso = false) {
     // Para archivos de Google Drive, usar Drive API si hay sesión activa
     const driveFileMatch = url.trim().match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
     if (driveFileMatch && state.driveToken) {
-      res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveFileMatch[1]}?alt=media`, {
-        headers: { Authorization: `Bearer ${state.driveToken}` }
-      });
+      res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${driveFileMatch[1]}?alt=media`);
     } else {
       res = await fetch(urlFinal);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const esSecundaria = $("nivel").value === "secundaria";
     if (xlsx) {
@@ -719,61 +839,12 @@ async function activarCamara() {
     video: videoConstraints,
     audio: false
   });
-  const preview = $("preview");
-  preview.srcObject = state.stream;
-  preview.addEventListener("loadedmetadata", actualizarGuiaCrop, { once: true });
+  $("preview").srcObject = state.stream;
 
   // Re-detectar cámaras ahora que el permiso fue otorgado (labels disponibles)
   const prev = selected;
   await detectarCamaras();
   $("camara").value = prev;
-}
-
-function actualizarGuiaCrop() {
-  const video = $("preview");
-  const guide = $("crop-guide");
-  if (!guide) return;
-  if (!video || !video.videoWidth) {
-    guide.style.display = "none";
-    return;
-  }
-
-  const nw = video.videoWidth;   // resolución nativa
-  const nh = video.videoHeight;
-  const cw = video.clientWidth;  // tamaño del elemento en pantalla
-  const ch = video.clientHeight;
-
-  // Cómo object-fit:cover posiciona el video dentro del elemento
-  const scale = Math.max(cw / nw, ch / nh);
-  const displayedW = nw * scale;
-  const displayedH = nh * scale;
-  const offsetX = (cw - displayedW) / 2;
-  const offsetY = (ch - displayedH) / 2;
-
-  // Área de crop nativa (cuadrado centrado)
-  const cropSize = Math.min(nw, nh);
-  const sx = (nw - cropSize) / 2;
-  const sy = (nh - cropSize) / 2;
-
-  // Mapear a coordenadas del elemento
-  let gx = sx * scale + offsetX;
-  let gy = sy * scale + offsetY;
-  let gw = cropSize * scale;
-  let gh = cropSize * scale;
-
-  // Clampar dentro del contenedor visible
-  const gx2 = Math.min(cw, gx + gw);
-  const gy2 = Math.min(ch, gy + gh);
-  gx = Math.max(0, gx);
-  gy = Math.max(0, gy);
-  gw = gx2 - gx;
-  gh = gy2 - gy;
-
-  guide.style.display = "block";
-  guide.style.left = `${gx}px`;
-  guide.style.top = `${gy}px`;
-  guide.style.width = `${gw}px`;
-  guide.style.height = `${gh}px`;
 }
 
 function seleccionarGrupo() {
@@ -1392,9 +1463,6 @@ function bindEvents() {
 
   // Inline ZIP button under camera
   $("btn-zip-inline").onclick = comprimirGrupo;
-
-  // Actualizar guía de crop al redimensionar ventana
-  window.addEventListener("resize", actualizarGuiaCrop);
 
   // Mobile bottom toolbar buttons
   $("tb-activar").onclick = () => activarCamara().catch((e) => toast(`No se pudo activar cámara: ${e.message}`, "error"));

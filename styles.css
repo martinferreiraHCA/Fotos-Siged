@@ -676,11 +676,17 @@ progress::-moz-progress-bar {
   border-radius: var(--radius-md);
   border: 2px solid var(--line);
   background: #1a2332;
+  /* Cuadrado 1:1: con object-fit:cover el video muestra exactamente el
+     recorte cuadrado centrado que se guarda en la foto (WYSIWYG). */
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  max-width: 440px;
+  margin-inline: auto;
 }
 
 #preview {
   width: 100%;
-  aspect-ratio: 4/3;
+  height: 100%;
   object-fit: cover;
   display: block;
   border-radius: 0;
@@ -688,14 +694,12 @@ progress::-moz-progress-bar {
   background: transparent;
 }
 
-.crop-guide {
-  display: none;
-  position: absolute;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
-  border: 2px dashed rgba(255, 255, 255, 0.7);
-  border-radius: 4px;
-  pointer-events: none;
-  z-index: 2;
+.camera-hint {
+  margin: .45rem auto 0;
+  max-width: 440px;
+  font-size: .72rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* ── Capture Button ──────────────────────────────── */
