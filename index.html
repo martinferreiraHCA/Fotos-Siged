@@ -25,6 +25,7 @@
         </div>
 
         <div class="header-user">
+          <button id="btn-admin" class="btn-header-sm btn-admin" title="Panel de administraci&oacute;n" hidden>&#9881; Admin</button>
           <button id="btn-config-drive" class="btn-header-icon" title="Configurar Google Drive" aria-label="Configurar Google Drive">⚙</button>
 
           <button id="btn-login-google" class="btn-google">
@@ -108,6 +109,7 @@
             <span class="drive-path-icon">&#128193;</span>
             <span id="drive-path-text" class="drive-path-text">No conectado</span>
           </div>
+          <p id="drive-modo" class="drive-modo"></p>
           <div class="drive-stats">
             <span id="drive-sync-count" class="drive-sync-count"></span>
           </div>
@@ -128,11 +130,12 @@
           <div class="controls-grid">
             <div class="field">
               <label for="nivel">Nivel
-                <span class="field-badge">Primaria &middot; Secundaria</span>
+                <span class="field-badge">Inicial &middot; Primaria &middot; Secundaria</span>
               </label>
               <div class="field-inline">
                 <select id="nivel">
-                  <option value="primaria">Primaria</option>
+                  <option value="inicial">Inicial</option>
+                  <option value="primaria" selected>Primaria</option>
                   <option value="secundaria">Secundaria</option>
                 </select>
                 <button class="help-btn" data-help="nivel" aria-label="Ayuda sobre nivel">?</button>
@@ -149,27 +152,40 @@
             </div>
 
             <div class="field field--full">
-              <label for="csv-file">Archivo de datos
-                <span class="field-badge">CSV &middot; XLSX</span>
+              <label for="btn-recargar-base">Base de datos del nivel
+                <span class="field-badge">Central &middot; Google Drive</span>
               </label>
               <div class="field-inline">
-                <input id="csv-file" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
-                <button class="help-btn" data-help="cargar-csv" aria-label="Ayuda para cargar archivo">?</button>
+                <p id="fuente-status" class="field-status fuente-status">Conecta Drive para cargar la base de datos del nivel.</p>
+                <button id="btn-recargar-base" class="btn-secondary">Recargar</button>
+                <button class="help-btn" data-help="base-datos" aria-label="Ayuda sobre la base de datos">?</button>
               </div>
-            </div>
+              <details class="manual-load">
+                <summary>Carga manual (respaldo)</summary>
+                <div class="field field--full">
+                  <label for="csv-file">Archivo de datos
+                    <span class="field-badge">CSV &middot; XLSX</span>
+                  </label>
+                  <div class="field-inline">
+                    <input id="csv-file" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
+                    <button class="help-btn" data-help="cargar-csv" aria-label="Ayuda para cargar archivo">?</button>
+                  </div>
+                </div>
 
-            <div class="field field--full">
-              <label for="csv-url">
-                URL fija de datos
-                <span class="field-badge">Google Sheets &middot; Google Drive &middot; GitHub</span>
-              </label>
-              <div class="field-inline">
-                <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/... o link de archivo en Drive" />
-                <button id="btn-cargar-url">Cargar URL</button>
-                <button id="btn-olvidar-url" class="btn-secondary" title="Quitar URL guardada" hidden>✕</button>
-                <button class="help-btn" data-help="cargar-url" aria-label="Ayuda para cargar desde URL">?</button>
-              </div>
-              <p id="url-status" class="field-status"></p>
+                <div class="field field--full">
+                  <label for="csv-url">
+                    URL fija de datos
+                    <span class="field-badge">Google Sheets &middot; Google Drive &middot; GitHub</span>
+                  </label>
+                  <div class="field-inline">
+                    <input id="csv-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/... o link de archivo en Drive" />
+                    <button id="btn-cargar-url">Cargar URL</button>
+                    <button id="btn-olvidar-url" class="btn-secondary" title="Quitar URL guardada" hidden>✕</button>
+                    <button class="help-btn" data-help="cargar-url" aria-label="Ayuda para cargar desde URL">?</button>
+                  </div>
+                  <p id="url-status" class="field-status"></p>
+                </div>
+              </details>
             </div>
 
             <div class="field">
@@ -215,6 +231,9 @@
                 Capturar
               </button>
               <div class="camera-actions">
+                <input id="foto-archivo" type="file" accept="image/*" hidden />
+                <button id="btn-subir-foto" class="btn-secondary">&#128228; Subir foto&hellip;</button>
+                <button class="help-btn" data-help="subir-foto" aria-label="Ayuda para subir foto desde archivo">?</button>
                 <button id="btn-zip-inline" class="btn-secondary">Generar ZIP</button>
               </div>
             </div>
@@ -278,6 +297,7 @@
           <li>Crea un proyecto &rarr; habilita <strong>Google Drive API</strong></li>
           <li>Credenciales &rarr; <strong>Crear credenciales &rarr; ID de cliente OAuth 2.0</strong></li>
           <li>Tipo: <strong>Aplicaci&oacute;n web</strong> &rarr; agrega tu dominio en "Or&iacute;genes de JS autorizados"</li>
+          <li>Pantalla de consentimiento: tipo <strong>Interno</strong> (Google Workspace) y permiso <code>.../auth/drive</code>, necesario para trabajar en la carpeta compartida por el administrador</li>
           <li>Copia el <strong>Client ID</strong> y p&eacute;galo abajo</li>
         </ol>
 
@@ -292,6 +312,79 @@
             <button class="btn-secondary">Cancelar</button>
           </form>
         </div>
+      </article>
+    </dialog>
+
+    <dialog id="admin-modal">
+      <article class="help-dialog admin-dialog">
+        <div class="admin-head">
+          <div>
+            <h3>Administraci&oacute;n SIGED
+              <button class="help-btn" data-help="admin" aria-label="Ayuda sobre administraci&oacute;n">?</button>
+            </h3>
+            <p id="admin-meta" class="admin-meta"></p>
+            <p id="admin-links" class="admin-links"></p>
+          </div>
+          <form method="dialog"><button class="btn-secondary btn-sm">Cerrar</button></form>
+        </div>
+
+        <section class="admin-section">
+          <h4>Carpetas de trabajo</h4>
+          <div class="admin-grid">
+            <div class="field">
+              <label for="adm-anio">A&ntilde;o lectivo</label>
+              <input id="adm-anio" type="text" inputmode="numeric" maxlength="4" placeholder="2026" autocomplete="off" />
+            </div>
+            <div class="field field--full">
+              <label for="adm-root">Carpeta ra&iacute;z en Drive
+                <span class="field-badge">link o ID &middot; vac&iacute;o = crear "SIGED Fotos" en tu Drive</span>
+              </label>
+              <input id="adm-root" type="text" placeholder="https://drive.google.com/drive/folders/..." autocomplete="off" />
+            </div>
+          </div>
+          <p class="admin-hint">Estructura que se genera: <code id="adm-estructura"></code></p>
+          <p class="admin-hint">Comparte la carpeta ra&iacute;z (permiso de <strong>editor</strong>) con las personas que sacan fotos. Al conectar Drive, cada usuario carga autom&aacute;ticamente esta configuraci&oacute;n, la base de datos de su nivel y las fotos ya tomadas del grupo.</p>
+        </section>
+
+        <section class="admin-section">
+          <h4>Bases de datos por nivel</h4>
+          <p class="admin-hint">Pega el link de una <strong>carpeta</strong> de Drive (se usa el XLSX/CSV m&aacute;s reciente que contenga) o de un archivo XLSX / Google Sheets con la exportaci&oacute;n de SIGED.</p>
+          <div class="admin-grid">
+            <div class="field field--full">
+              <label for="adm-fuente-inicial">Inicial</label>
+              <input id="adm-fuente-inicial" type="text" placeholder="https://drive.google.com/drive/folders/..." autocomplete="off" />
+            </div>
+            <div class="field field--full">
+              <label for="adm-fuente-primaria">Primaria</label>
+              <input id="adm-fuente-primaria" type="text" placeholder="https://drive.google.com/drive/folders/..." autocomplete="off" />
+            </div>
+            <div class="field field--full">
+              <label for="adm-fuente-secundaria">Secundaria</label>
+              <input id="adm-fuente-secundaria" type="text" placeholder="https://drive.google.com/drive/folders/..." autocomplete="off" />
+            </div>
+          </div>
+          <div class="config-actions">
+            <button type="button" id="btn-admin-guardar">Guardar configuraci&oacute;n</button>
+            <p id="admin-guardar-status" class="field-status"></p>
+          </div>
+        </section>
+
+        <section class="admin-section">
+          <h4>Registro de actividad
+            <button type="button" id="btn-admin-registro" class="btn-secondary btn-sm">Actualizar</button>
+          </h4>
+          <p id="admin-registro-status" class="field-status"></p>
+          <div class="admin-table-wrap">
+            <table id="admin-tabla-grupos" class="admin-table">
+              <thead>
+                <tr><th>Nivel</th><th>Grupo</th><th class="num">Fotos</th><th>&Uacute;ltimo cambio</th><th>Por</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <h5 class="admin-subtitle">&Uacute;ltimas fotos subidas o reemplazadas</h5>
+          <ul id="admin-ultimos" class="admin-log"></ul>
+        </section>
       </article>
     </dialog>
 
