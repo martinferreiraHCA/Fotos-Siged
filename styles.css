@@ -1446,3 +1446,161 @@ dialog::backdrop {
   .admin-log li { grid-template-columns: 1fr 1fr; }
   .btn-admin span { display: none; }
 }
+
+/* ── Navegación entre secciones ──────────────────── */
+.app-nav {
+  max-width: 1200px;
+  width: 94%;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  padding: 0 0 .5rem;
+}
+
+.nav-btn {
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.18);
+  color: rgba(255,255,255,.8);
+  border-radius: 999px;
+  padding: .35rem .85rem;
+  font-size: .74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.nav-btn:hover {
+  background: rgba(255,255,255,.18);
+  color: #fff;
+  transform: none;
+  box-shadow: none;
+}
+.nav-btn.active {
+  background: #fff;
+  color: var(--primary);
+  border-color: #fff;
+}
+
+.nav-badge {
+  margin-left: auto;
+  font-size: .6rem;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: #fff;
+  background: rgba(255,255,255,.18);
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 999px;
+  padding: .2rem .55rem;
+}
+
+/* ── Vista Gestión ───────────────────────────────── */
+.layout--gestion {
+  grid-template-columns: 1fr;
+  max-width: 960px;
+}
+
+.gestion-card { padding: 1rem 1.1rem; }
+
+.gestion-aviso p {
+  margin: 0;
+  font-size: .82rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.gestion-hint {
+  margin: 0 0 .75rem;
+  font-size: .76rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.gestion-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: .75rem;
+  margin-bottom: .6rem;
+}
+
+.check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem .9rem;
+  padding-top: .25rem;
+}
+.check-row label,
+.check-list-head label {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .76rem;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  margin: 0;
+  cursor: pointer;
+}
+.check-row input,
+.check-list input { width: auto; accent-color: var(--primary); }
+
+.check-list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  margin: .5rem 0 .3rem;
+}
+.check-list-head .field-status { margin: 0; }
+
+.check-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+}
+.check-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .45rem .6rem;
+  border-bottom: 1px solid var(--line-light);
+  font-size: .76rem;
+}
+.check-list li:last-child { border-bottom: none; }
+.check-list li:hover { background: var(--surface-soft); }
+.check-list label {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: .76rem;
+  font-weight: 500;
+  margin: 0;
+  color: var(--text);
+}
+.check-nombre { font-weight: 600; color: var(--primary); }
+.check-detalle { color: var(--muted); font-size: .68rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check-estado { font-size: .68rem; color: var(--success); white-space: nowrap; }
+.check-list .admin-empty { justify-content: flex-start; }
+
+body.en-gestion .mobile-toolbar { display: none !important; }
+
+@media (max-width: 640px) {
+  .app-nav { width: 96%; }
+  .nav-btn { padding: .35rem .7rem; font-size: .7rem; }
+  .nav-badge { display: none; }
+  .check-list li { flex-direction: column; align-items: flex-start; }
+  .check-list label { flex-wrap: wrap; }
+}
