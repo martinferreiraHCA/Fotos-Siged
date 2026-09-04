@@ -9,6 +9,21 @@ const MID_WIDTH = 600;
 const MID_HEIGHT = 600;
 const MID_QUALITY = 0.8;
 const CEDULA_FOLDER_NAME = "imagenes por cédula";
+const SIGED_FOLDER_NAME = "SIGED";
+
+// Niveles educativos. La carpeta de cada nivel se crea dentro de la carpeta
+// del año lectivo: <raíz>/<año>/<nivel>/{SIGED, HD, por cédula}/<grupo>
+const NIVELES = {
+  inicial:    { label: "Inicial",    carpeta: "Inicial",    concatenarCurso: false },
+  primaria:   { label: "Primaria",   carpeta: "Primaria",   concatenarCurso: false },
+  secundaria: { label: "Secundaria", carpeta: "Secundaria", concatenarCurso: true }
+};
+
+// Cuentas que pueden editar la configuración central (carpetas y bases de datos).
+const ADMIN_EMAILS = ["martinferreira@hca.edu.uy"];
+// Archivo JSON con la configuración central. Vive en la carpeta raíz de Drive
+// del administrador; al compartir esa carpeta, todos los usuarios lo leen.
+const CONFIG_FILE_NAME = "siged-config.json";
 
 /* ── Toast notifications ──────────────────────────── */
 function toast(message, type = "info", duration = 3200) {
@@ -16,12 +31,18 @@ function toast(message, type = "info", duration = 3200) {
   const icons = { success: "✓", error: "✕", info: "ℹ" };
   const el = document.createElement("div");
   el.className = `toast toast--${type}`;
-  el.innerHTML = `<span>${icons[type] ?? icons.info}</span><span>${message}</span>`;
+  el.innerHTML = `<span>${icons[type] ?? icons.info}</span><span>${escapeHtml(message)}</span>`;
   container.appendChild(el);
   setTimeout(() => {
     el.classList.add("toast--out");
     el.addEventListener("animationend", () => el.remove(), { once: true });
   }, duration);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 const state = {
@@ -30,34 +51,52 @@ const state = {
   grupoActual: "",
   estudiantes: [],
   seleccion: null,
-  fotos: new Map(), // documento => dataURL (100x100)
-  fotosHD: new Map(), // documento => dataURL (1080x1080)
+  fotos: new Map(),       // documento => dataURL (100x100)
+  fotosHD: new Map(),     // documento => dataURL (1080x1080)
   fotosCedula: new Map(), // documento => dataURL (600x600, peso reducido)
+  fotosMeta: new Map(),   // documento => { fecha, anio, nivel, grupo, origen }
   stream: null,
   currentDevices: [],
   // Google Drive
   driveToken:    null,
   driveTokenExpira: null, // timestamp de vencimiento del token
   driveUser:     null,
-  driveFolderId: null,
-  driveGrupoId:  null,
-  driveFiles:    new Map(), // documento => fileId en Drive
-  driveHDFolderId: null,
-  driveHDGrupoId:  null,
-  driveCedulaFolderId: null,
-  driveCedulaGrupoId:  null
+  esAdmin:       false,
+  // Configuración central
+  config:        null,
+  configFileId:  null,
+  configOrigen:  "defecto", // "drive" | "cache" | "defecto"
+  // Carpetas de Drive resueltas: ruta ("/2026/Primaria/SIGED/3A") => folderId
+  carpetas: new Map(),
+  grupoCarpetas: null,     // { clave, siged, hd, cedula }
+  grupoCarpetasPromesa: null,
+  // Archivos en Drive del grupo actual: documento => [fileId, ...] (más reciente primero)
+  driveFiles:       new Map(),
+  driveHDFiles:     new Map(),
+  driveCedulaFiles: new Map(),
+  driveFechas:      new Map(), // documento => modifiedTime (ms) de la foto SIGED en Drive
+  fuenteActual: null,          // descripción de la base de datos cargada
+  registro: null,              // último registro de actividad cargado (admin)
+  inventario: null,            // carpetas de grupo y fotos del año (Gestión)
+  migracionPlan: null,         // grupos detectados en una carpeta antigua
+  vista: "fotos"
 };
 
 const helpText = {
   "panel-info":        { title: "Información general",     body: "Muestra resumen del grupo: cuántos estudiantes hay, cuántos tienen foto y el progreso general." },
   "ultima-foto":       { title: "Última foto tomada",      body: "Presenta una miniatura de la foto más reciente y el nombre/documento del estudiante asociado." },
-  "nivel":             { title: "Nivel educativo",         body: "Selecciona Primaria o Secundaria. Cada nivel guarda su propia URL de datos. El formato de Secundaria incluye el campo 'Jura. Band.' que no está en Primaria." },
+  "nivel":             { title: "Nivel educativo",         body: "Selecciona Inicial, Primaria o Secundaria. El administrador define de qué carpeta de Drive se toma la base de datos de cada nivel; al cambiar de nivel se carga automáticamente. Las fotos se guardan en Drive dentro de <año lectivo>/<nivel>/<grupo>." },
   "activar-camara":    { title: "Activar cámara",          body: "Solicita permisos de cámara al navegador y habilita la vista previa en tiempo real." },
+  "base-datos":        { title: "Base de datos",           body: "Con Drive conectado, la lista de estudiantes se carga sola desde la carpeta que configuró el administrador para el nivel (se usa el XLSX/CSV más reciente). Usa \"Recargar\" si el administrador subió un archivo nuevo. La carga manual es solo un respaldo." },
   "cargar-csv":        { title: "Cargar archivo de datos", body: "Lee un archivo CSV o XLSX local (sin subirlo a internet), detecta grupos y prepara la lista de estudiantes. Soporta el formato de exportación SIGED." },
-  "seleccionar-grupo": { title: "Seleccionar grupo",       body: "Filtra estudiantes por grupo y reinicia la vista para trabajar solo con ese grupo." },
-  "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara y genera tres versiones: 100×100 px para SIGED, 1080×1080 px en alta resolución (nombre_apellido_cédula) y 600×600 px de peso reducido nombrada solo con la cédula." },
-  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP con tres carpetas: SIGED (100×100), imágenes de estudiantes alta resolución (1080×1080) e imágenes por cédula (600×600, peso reducido para subir a otros sistemas)." },
-  "cargar-url":        { title: "URL fija de datos",       body: "Pega el link de tu Google Sheets, un archivo XLSX en Google Drive, o un CSV en GitHub Raw. La app convierte el link automáticamente y guarda la URL por nivel (Primaria/Secundaria) en el navegador." }
+  "seleccionar-grupo": { title: "Seleccionar grupo",       body: "Filtra estudiantes por grupo y sincroniza con Drive las fotos que ya existan de ese grupo (tomadas por cualquier usuario)." },
+  "guardar-foto":      { title: "Guardar foto",            body: "Captura el frame actual de la cámara y genera tres versiones: 100×100 px para SIGED, 1080×1080 px en alta resolución (nombre_apellido_cédula) y 600×600 px de peso reducido nombrada solo con la cédula. Si el estudiante ya tenía foto en Drive, la nueva la reemplaza y la vieja se elimina." },
+  "subir-foto":        { title: "Subir foto desde archivo", body: "Permite elegir una imagen del dispositivo (galería, archivo) en lugar de usar la cámara. Se recorta al centro en formato cuadrado y se generan las mismas tres versiones que al capturar. Reemplaza la foto anterior del estudiante." },
+  "comprimir":         { title: "Generar ZIP del grupo",   body: "Genera un ZIP con tres carpetas: SIGED (100×100), imágenes de estudiantes alta resolución (1080×1080) e imágenes por cédula (600×600). Si faltan versiones en este dispositivo se descargan desde Drive." },
+  "cargar-url":        { title: "URL fija de datos",       body: "Respaldo manual: pega el link de un Google Sheets, un archivo XLSX en Google Drive o un CSV en GitHub Raw. Se guarda por nivel solo en este navegador. Si el administrador configuró una base central, esta tiene prioridad." },
+  "gestion-zip":       { title: "Descargar fotos en ZIP", body: "Arma un ZIP con las fotos que están en Drive para el año lectivo actual. Elige el nivel, marca los grupos a incluir y qué versiones quieres (alta resolución, peso reducido o SIGED). Dentro del ZIP cada archivo se llama solo con la cédula del estudiante." },
+  "gestion-migrar":    { title: "Migrar carpetas anteriores", body: "Compatibilidad con versiones anteriores: pega el link de la carpeta vieja (la \"SIGED Fotos\" antigua con sus subcarpetas de grupo, alta resolución y por cédula, o directamente una carpeta de grupo). La app detecta los grupos y copia las fotos, conservando alta y baja resolución, a la carpeta del año y nivel que elijas. La carpeta original no se modifica." },
+  "admin":             { title: "Administración",          body: "Solo para cuentas administradoras. Define el año lectivo, la carpeta raíz de Drive donde trabajan todos los usuarios y la carpeta o archivo de base de datos de cada nivel. También muestra quién fue el último en modificar las fotos de cada grupo." }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -67,16 +106,48 @@ const STORAGE_GCLIENT_KEY = "siged_google_client_id";
 const STORAGE_NIVEL_KEY   = "siged_nivel";
 const STORAGE_URL_PRIMARIA   = "siged_url_primaria";
 const STORAGE_URL_SECUNDARIA = "siged_url_secundaria";
+const STORAGE_URL_PREFIX     = "siged_url_";
+const STORAGE_GRUPO_PREFIX   = "siged_grupo_";
+const STORAGE_CONFIG_CACHE   = "siged_config_cache";
 const DRIVE_ROOT          = "SIGED Fotos";
 const DEFAULT_CLIENT_ID   = "263672487463-bf0e1fn8k66tnvsfld7dtnmmd5ag6t46.apps.googleusercontent.com";
-const DRIVE_SCOPE  = "https://www.googleapis.com/auth/drive.file";
+// Se necesita el permiso completo de Drive para trabajar sobre carpetas
+// compartidas por el administrador (con drive.file cada usuario solo veía
+// los archivos creados por él mismo).
+const DRIVE_SCOPE  = "https://www.googleapis.com/auth/drive";
 const DRIVE_SCOPES = `${DRIVE_SCOPE} profile email`;
+const FOLDER_MIME  = "application/vnd.google-apps.folder";
+const GSHEET_MIME  = "application/vnd.google-apps.spreadsheet";
+const XLSX_MIME    = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 let tokenClient = null;
 let pendingToken = null;      // solicitud de token en curso { resolve, reject }
 let renovacionEnCurso = null; // promesa compartida para no pedir dos tokens a la vez
 
 function sanitizeDoc(value) {
   return String(value ?? "").replace(/[.-]/g, "").trim();
+}
+
+function nivelActual() {
+  const v = $("nivel")?.value;
+  return v in NIVELES ? v : "primaria";
+}
+
+function claveUrlNivel(nivel = nivelActual()) {
+  if (nivel === "primaria") return STORAGE_URL_PRIMARIA;
+  if (nivel === "secundaria") return STORAGE_URL_SECUNDARIA;
+  return `${STORAGE_URL_PREFIX}${nivel}`;
+}
+
+function formatoFecha(valor) {
+  if (!valor) return "—";
+  const d = valor instanceof Date ? valor : new Date(valor);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function nombreUsuario(u) {
+  if (!u) return "—";
+  return u.displayName || u.emailAddress || u.name || u.email || "—";
 }
 
 // Genera una versión de peso reducido (MID_WIDTH x MID_HEIGHT JPEG) a partir
@@ -142,16 +213,28 @@ function normalizarUrl(url) {
   return url;
 }
 
-function obtenerUrlKeyNivel() {
-  const nivel = $("nivel")?.value;
-  return nivel === "secundaria" ? STORAGE_URL_SECUNDARIA : STORAGE_URL_PRIMARIA;
+// Extrae el ID de Drive de un link de carpeta, archivo o Google Sheets.
+// También acepta el ID pelado. Devuelve null si no parece de Drive.
+function extraerIdDrive(texto) {
+  const t = String(texto ?? "").trim();
+  if (!t) return null;
+  const m = t.match(/\/folders\/([a-zA-Z0-9_-]{10,})/)
+    || t.match(/\/(?:file|spreadsheets|document)\/d\/([a-zA-Z0-9_-]{10,})/)
+    || t.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
+  if (m) return m[1];
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(t)) return t;
+  return null;
+}
+
+function linkCarpetaDrive(id) {
+  return `https://drive.google.com/drive/folders/${id}`;
 }
 
 function actualizarStatusUrl(url) {
   const el = $("url-status");
   const btn = $("btn-olvidar-url");
   if (url) {
-    el.textContent = `✓ URL configurada: ${url.length > 60 ? url.slice(0, 57) + "…" : url}`;
+    el.textContent = `✓ URL manual guardada: ${url.length > 60 ? url.slice(0, 57) + "…" : url}`;
     el.className = "field-status field-status--ok";
     btn.hidden = false;
   } else {
@@ -159,6 +242,174 @@ function actualizarStatusUrl(url) {
     el.className = "field-status";
     btn.hidden = true;
   }
+}
+
+function actualizarStatusFuente() {
+  const el = $("fuente-status");
+  if (!el) return;
+  const f = state.fuenteActual;
+  if (!f) {
+    const cfg = configActual();
+    const central = cfg.niveles?.[nivelActual()]?.fuente;
+    if (central && !state.driveToken) {
+      el.textContent = "Base central configurada. Conecta Drive para cargarla.";
+      el.className = "field-status";
+    } else if (!central) {
+      el.textContent = state.driveToken
+        ? `Sin base central para ${NIVELES[nivelActual()].label}. Pide al administrador que la configure o usa la carga manual.`
+        : "Conecta Drive para cargar la base de datos del nivel.";
+      el.className = "field-status";
+    } else {
+      el.textContent = "";
+      el.className = "field-status";
+    }
+    return;
+  }
+  const partes = [f.descripcion];
+  if (f.modificado) partes.push(`actualizado ${formatoFecha(f.modificado)}`);
+  if (f.modificadoPor) partes.push(`por ${f.modificadoPor}`);
+  el.textContent = `✓ ${partes.join(" · ")}`;
+  el.className = f.central ? "field-status field-status--ok" : "field-status field-status--warn";
+}
+
+/* ── Configuración central ────────────────────────── */
+function configPorDefecto() {
+  return {
+    version: 1,
+    anioLectivo: String(new Date().getFullYear()),
+    rootFolderId: "",
+    rootFolderName: DRIVE_ROOT,
+    niveles: {
+      inicial:    { fuente: "" },
+      primaria:   { fuente: "" },
+      secundaria: { fuente: "" }
+    },
+    actualizadoPor: "",
+    actualizadoEn: ""
+  };
+}
+
+function normalizarConfig(cfg) {
+  const base = configPorDefecto();
+  const out = { ...base, ...(cfg ?? {}) };
+  out.anioLectivo = String(out.anioLectivo || base.anioLectivo).trim();
+  out.rootFolderName = out.rootFolderName || DRIVE_ROOT;
+  out.niveles = { ...base.niveles };
+  Object.keys(NIVELES).forEach((n) => {
+    out.niveles[n] = { fuente: String(cfg?.niveles?.[n]?.fuente ?? "").trim() };
+  });
+  return out;
+}
+
+function configActual() {
+  return state.config ?? configPorDefecto();
+}
+
+function guardarConfigEnCache() {
+  try { localStorage.setItem(STORAGE_CONFIG_CACHE, JSON.stringify(state.config)); } catch { /* ignorar */ }
+}
+
+// Busca el archivo de configuración compartido por el administrador.
+async function cargarConfiguracionCentral() {
+  const { files = [] } = await driveRequest("GET", "files", null, {
+    q: `name='${CONFIG_FILE_NAME}' and trashed=false`,
+    fields: "files(id,name,modifiedTime,parents,owners(emailAddress),lastModifyingUser(displayName,emailAddress))",
+    orderBy: "modifiedTime desc",
+    pageSize: "10",
+    corpora: "allDrives"
+  });
+  const esDeAdmin = (f) => (f.owners ?? []).some((o) => ADMIN_EMAILS.includes(String(o.emailAddress ?? "").toLowerCase()));
+  const elegido = files.find(esDeAdmin) ?? files[0];
+  if (!elegido) {
+    state.configFileId = null;
+    state.configOrigen = state.config ? "cache" : "defecto";
+    return null;
+  }
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${elegido.id}?alt=media&supportsAllDrives=true`);
+  const cfg = await res.json();
+  state.config = normalizarConfig(cfg);
+  state.configFileId = elegido.id;
+  state.configOrigen = "drive";
+  state.carpetas.clear();
+  state.grupoCarpetas = null;
+  guardarConfigEnCache();
+  console.info("[SIGED] Configuración central cargada", { archivo: elegido.id, ...state.config });
+  return state.config;
+}
+
+// Guarda (crea o actualiza) el archivo de configuración dentro de la carpeta raíz.
+async function guardarConfiguracionCentral(cfg) {
+  cfg = normalizarConfig(cfg);
+  cfg.actualizadoPor = state.driveUser?.email ?? "";
+  cfg.actualizadoEn = new Date().toISOString();
+
+  // Resolver/crear la carpeta raíz
+  if (cfg.rootFolderId) {
+    const meta = await driveRequest("GET", `files/${cfg.rootFolderId}`, null, { fields: "id,name,mimeType" });
+    if (meta.mimeType !== FOLDER_MIME) throw new Error("El link de la carpeta raíz no corresponde a una carpeta de Drive.");
+    cfg.rootFolderName = meta.name;
+  } else {
+    cfg.rootFolderId = await encontrarOCrearCarpeta(DRIVE_ROOT);
+    cfg.rootFolderName = DRIVE_ROOT;
+  }
+
+  // Validar las fuentes de datos que apunten a Drive
+  for (const [nivel, info] of Object.entries(cfg.niveles)) {
+    const id = extraerIdDrive(info.fuente);
+    if (!id) continue;
+    try {
+      await driveRequest("GET", `files/${id}`, null, { fields: "id,name,mimeType" });
+    } catch (e) {
+      throw new Error(`No se puede acceder a la fuente de ${NIVELES[nivel].label}: ${e.message}`);
+    }
+  }
+
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" });
+  const form = new FormData();
+  let url;
+  let method;
+  if (state.configFileId) {
+    // Mover el archivo si cambió la carpeta raíz
+    const actual = await driveRequest("GET", `files/${state.configFileId}`, null, { fields: "id,parents" }).catch(() => null);
+    if (!actual) {
+      state.configFileId = null;
+    } else {
+      const padres = actual.parents ?? [];
+      const params = new URLSearchParams({ uploadType: "multipart", supportsAllDrives: "true", fields: "id" });
+      if (!padres.includes(cfg.rootFolderId)) {
+        params.set("addParents", cfg.rootFolderId);
+        if (padres.length) params.set("removeParents", padres.join(","));
+      }
+      url = `https://www.googleapis.com/upload/drive/v3/files/${state.configFileId}?${params}`;
+      method = "PATCH";
+      form.append("metadata", new Blob([JSON.stringify({ name: CONFIG_FILE_NAME, mimeType: "application/json" })], { type: "application/json" }));
+    }
+  }
+  if (!state.configFileId) {
+    url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id";
+    method = "POST";
+    form.append("metadata", new Blob([JSON.stringify({
+      name: CONFIG_FILE_NAME, mimeType: "application/json", parents: [cfg.rootFolderId]
+    })], { type: "application/json" }));
+  }
+  form.append("file", blob);
+  const res = await driveFetch(url, { method, body: form });
+  const file = await res.json();
+  state.configFileId = file.id ?? state.configFileId;
+  state.config = cfg;
+  state.configOrigen = "drive";
+  state.carpetas.clear();
+  state.grupoCarpetas = null;
+  guardarConfigEnCache();
+
+  // Pre-crear la estructura del año para que quede visible en Drive
+  for (const n of Object.values(NIVELES)) {
+    await resolverCarpeta([cfg.anioLectivo, n.carpeta, SIGED_FOLDER_NAME]);
+    await resolverCarpeta([cfg.anioLectivo, n.carpeta, HD_FOLDER_NAME]);
+    await resolverCarpeta([cfg.anioLectivo, n.carpeta, CEDULA_FOLDER_NAME]);
+  }
+  console.info("[SIGED] Configuración central guardada", cfg);
+  return cfg;
 }
 
 /* ── Persistencia de sesión (fotos en IndexedDB) ──── */
@@ -169,9 +420,11 @@ function actualizarStatusUrl(url) {
 async function guardarSesion() {
   try {
     const db = await abrirDB();
-    const tx = db.transaction("fotos_siged", "readwrite");
+    const tx = db.transaction(["fotos_siged", "fotos_meta"], "readwrite");
     const store = tx.objectStore("fotos_siged");
     state.fotos.forEach((v, k) => store.put(v, k));
+    const meta = tx.objectStore("fotos_meta");
+    state.fotosMeta.forEach((v, k) => meta.put(v, k));
     await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
     db.close();
   } catch {
@@ -197,13 +450,18 @@ async function restaurarSesion() {
 
   try {
     const db = await abrirDB();
-    const tx = db.transaction("fotos_siged", "readonly");
+    const tx = db.transaction(["fotos_siged", "fotos_meta"], "readonly");
     const reqAll = tx.objectStore("fotos_siged").getAll();
     const reqKeys = tx.objectStore("fotos_siged").getAllKeys();
+    const reqMetaAll = tx.objectStore("fotos_meta").getAll();
+    const reqMetaKeys = tx.objectStore("fotos_meta").getAllKeys();
     await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
     db.close();
     for (let i = 0; i < reqKeys.result.length; i++) {
       if (!state.fotos.has(reqKeys.result[i])) state.fotos.set(reqKeys.result[i], reqAll.result[i]);
+    }
+    for (let i = 0; i < reqMetaKeys.result.length; i++) {
+      state.fotosMeta.set(reqMetaKeys.result[i], reqMetaAll.result[i]);
     }
     // Migrar lo legacy a IndexedDB y liberar localStorage, que era lo que
     // provocaba el error de almacenamiento lleno.
@@ -229,10 +487,11 @@ function actualizarInfoSesion() {
 }
 
 function limpiarSesion() {
-  if (!confirm(`¿Borrar las ${state.fotos.size} fotos guardadas en este navegador? Esta acción no se puede deshacer.`)) return;
+  if (!confirm(`¿Borrar las ${state.fotos.size} fotos guardadas en este navegador? Las fotos que ya estén en Drive no se borran de Drive.`)) return;
   state.fotos.clear();
   state.fotosHD.clear();
   state.fotosCedula.clear();
+  state.fotosMeta.clear();
   localStorage.removeItem(STORAGE_FOTOS_KEY);
   limpiarSesionHD();
   actualizarInfoSesion();
@@ -242,17 +501,19 @@ function limpiarSesion() {
   $("ultimo-estudiante").textContent = "Ninguna foto tomada.";
   actualizarStudentPreview();
   toast("Sesión limpiada. Todas las fotos borradas del navegador.", "info");
+  if (state.driveToken && state.grupoActual) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
 }
 
 /* ── IndexedDB para fotos HD y por cédula ────────── */
 function abrirDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("siged_fotos_hd", 3);
+    const req = indexedDB.open("siged_fotos_hd", 4);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains("fotos_hd")) db.createObjectStore("fotos_hd");
       if (!db.objectStoreNames.contains("fotos_cedula")) db.createObjectStore("fotos_cedula");
       if (!db.objectStoreNames.contains("fotos_siged")) db.createObjectStore("fotos_siged");
+      if (!db.objectStoreNames.contains("fotos_meta")) db.createObjectStore("fotos_meta");
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -291,13 +552,29 @@ async function restaurarSesionHD() {
   } catch { /* IndexedDB no disponible — ignorar */ }
 }
 
+// Elimina del dispositivo las versiones HD/cédula de un estudiante (por
+// ejemplo cuando otro usuario subió una foto más nueva a Drive).
+async function borrarVersionesLocales(doc) {
+  state.fotosHD.delete(doc);
+  state.fotosCedula.delete(doc);
+  try {
+    const db = await abrirDB();
+    const tx = db.transaction(["fotos_hd", "fotos_cedula"], "readwrite");
+    tx.objectStore("fotos_hd").delete(doc);
+    tx.objectStore("fotos_cedula").delete(doc);
+    await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
+    db.close();
+  } catch { /* ignorar */ }
+}
+
 async function limpiarSesionHD() {
   try {
     const db = await abrirDB();
-    const tx = db.transaction(["fotos_hd", "fotos_cedula", "fotos_siged"], "readwrite");
+    const tx = db.transaction(["fotos_hd", "fotos_cedula", "fotos_siged", "fotos_meta"], "readwrite");
     tx.objectStore("fotos_hd").clear();
     tx.objectStore("fotos_cedula").clear();
     tx.objectStore("fotos_siged").clear();
+    tx.objectStore("fotos_meta").clear();
     await new Promise((r, j) => { tx.oncomplete = r; tx.onerror = j; });
     db.close();
   } catch { /* IndexedDB no disponible — ignorar */ }
@@ -342,7 +619,7 @@ function inicializarGIS(clientId) {
       if (pend) { pend.resolve(response.access_token); return; }
       await obtenerInfoUsuario().catch(() => {});
       actualizarUIUsuario();
-      if (state.grupoActual) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
+      cargarTodoDesdeDrive().catch(() => {});
     },
     error_callback: (err) => {
       const msgs = {
@@ -410,6 +687,7 @@ async function obtenerInfoUsuario() {
     headers: { Authorization: `Bearer ${state.driveToken}` }
   });
   state.driveUser = await res.json();
+  state.esAdmin = ADMIN_EMAILS.includes(String(state.driveUser?.email ?? "").toLowerCase());
 }
 
 async function loginConGoogle() {
@@ -428,10 +706,39 @@ async function loginConGoogle() {
     await obtenerInfoUsuario().catch(() => {});
     actualizarUIUsuario();
     toast("Google Drive conectado correctamente.", "success");
-    if (state.grupoActual) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
+    await cargarTodoDesdeDrive();
   } catch (e) {
     toast(e.message, "error", 8000);
   }
+}
+
+// Al conectar: leer la configuración del administrador, cargar la base de
+// datos del nivel y sincronizar las fotos existentes del grupo.
+async function cargarTodoDesdeDrive() {
+  const statusEl = $("drive-status");
+  if (statusEl) statusEl.textContent = "Leyendo configuración…";
+  try {
+    await cargarConfiguracionCentral();
+  } catch (e) {
+    toast(`No se pudo leer la configuración central: ${e.message}`, "error", 6000);
+  }
+  if (state.configOrigen !== "drive") {
+    if (state.esAdmin) {
+      toast("No hay configuración central todavía. Defínela en la sección Gestión (carpetas y bases de datos).", "info", 7000);
+    } else {
+      toast("No se encontró la configuración central del administrador. Se usará tu Drive personal.", "info", 7000);
+    }
+  }
+  state.carpetas.clear();
+  state.grupoCarpetas = null;
+  state.inventario = null;
+  state.registro = null;
+  actualizarUIUsuario();
+  const cargada = await cargarBaseNivel({ silencioso: true });
+  if (!cargada && state.grupoActual) {
+    await sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
+  }
+  actualizarStatusFuente();
 }
 
 function logoutGoogle() {
@@ -439,14 +746,20 @@ function logoutGoogle() {
   state.driveToken    = null;
   state.driveTokenExpira = null;
   state.driveUser     = null;
-  state.driveFolderId = null;
-  state.driveGrupoId  = null;
-  state.driveHDFolderId = null;
-  state.driveHDGrupoId  = null;
-  state.driveCedulaFolderId = null;
-  state.driveCedulaGrupoId  = null;
+  state.esAdmin       = false;
+  state.configFileId  = null;
+  if (state.configOrigen === "drive") state.configOrigen = "cache";
+  state.carpetas.clear();
+  state.grupoCarpetas = null;
   state.driveFiles.clear();
+  state.driveHDFiles.clear();
+  state.driveCedulaFiles.clear();
+  state.driveFechas.clear();
+  state.inventario = null;
+  state.registro = null;
   actualizarUIUsuario();
+  actualizarStatusFuente();
+  renderEstudiantes();
   toast("Sesión de Google cerrada.", "info");
 }
 
@@ -454,6 +767,7 @@ function actualizarUIUsuario() {
   const loggedIn = !!state.driveToken;
   $("btn-login-google").hidden = loggedIn;
   $("user-info").hidden = !loggedIn;
+  $("btn-admin").hidden = !(loggedIn && state.esAdmin);
   if (loggedIn && state.driveUser) {
     $("user-name").textContent = state.driveUser.name ?? state.driveUser.email ?? "Usuario";
     const avatar = $("user-avatar");
@@ -461,6 +775,7 @@ function actualizarUIUsuario() {
     else { avatar.hidden = true; }
   }
   actualizarDrivePanel();
+  if (state.vista === "gestion") prepararGestion();
 }
 
 // ── Drive API helpers ──────────────────────────────
@@ -507,14 +822,16 @@ async function driveFetch(url, init = {}, reintentos = 3, repararScopes = true) 
         await solicitarToken("consent");
         continue;
       } catch {
-        throw new Error('Faltan permisos de Google Drive. Pulsa "Conectar Drive" y, en la pantalla de Google, deja marcada la casilla "Ver y administrar los archivos de Google Drive que abriste o creaste con esta app".');
+        throw new Error('Faltan permisos de Google Drive. Pulsa "Conectar Drive" y, en la pantalla de Google, deja marcada la casilla de acceso a Google Drive.');
       }
     }
-    if (res.status === 403 || res.status === 429 || res.status >= 500) {
+    if ((res.status === 403 && !/permission|forbidden|not have/i.test(mensaje)) || res.status === 429 || res.status >= 500) {
       ultimoError = new Error(mensaje);
       continue;
     }
-    throw new Error(mensaje);
+    const err = new Error(mensaje);
+    err.status = res.status;
+    throw err;
   }
   throw ultimoError ?? new Error("No se pudo conectar con Google Drive.");
 }
@@ -528,6 +845,9 @@ async function verificarAccesoDrive() {
 
 async function driveRequest(method, path, body = null, params = {}) {
   const url = new URL(`https://www.googleapis.com/drive/v3/${path}`);
+  // Soportar carpetas dentro de unidades compartidas
+  url.searchParams.set("supportsAllDrives", "true");
+  if (method === "GET" && path === "files") url.searchParams.set("includeItemsFromAllDrives", "true");
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const init = { method, headers: {} };
   if (body instanceof FormData) {
@@ -540,17 +860,111 @@ async function driveRequest(method, path, body = null, params = {}) {
   return res.status !== 204 ? res.json() : null;
 }
 
-async function encontrarOCrearCarpeta(nombre, parentId = null) {
-  let q = `name='${nombre}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+function escaparQ(texto) {
+  return String(texto).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+// Lista todas las páginas de una consulta de archivos.
+async function listarArchivos(q, fields = "files(id,name)", { orderBy = "", max = 2000, pageSize = 200 } = {}) {
+  const out = [];
+  let pageToken = "";
+  do {
+    const params = { q, fields: `nextPageToken,${fields}`, pageSize: String(pageSize) };
+    if (orderBy) params.orderBy = orderBy;
+    if (pageToken) params.pageToken = pageToken;
+    const data = await driveRequest("GET", "files", null, params);
+    out.push(...(data.files ?? []));
+    pageToken = data.nextPageToken ?? "";
+  } while (pageToken && out.length < max);
+  return out;
+}
+
+async function buscarCarpeta(nombre, parentId = null) {
+  let q = `name='${escaparQ(nombre)}' and mimeType='${FOLDER_MIME}' and trashed=false`;
   if (parentId) q += ` and '${parentId}' in parents`;
-  const { files = [] } = await driveRequest("GET", "files", null, { q, fields: "files(id)" });
-  if (files.length) return files[0].id;
+  const { files = [] } = await driveRequest("GET", "files", null, { q, fields: "files(id)", orderBy: "createdTime", pageSize: "5" });
+  return files[0]?.id ?? null;
+}
+
+async function encontrarOCrearCarpeta(nombre, parentId = null) {
+  const existente = await buscarCarpeta(nombre, parentId);
+  if (existente) return existente;
   const carpeta = await driveRequest("POST", "files", {
     name: nombre,
-    mimeType: "application/vnd.google-apps.folder",
+    mimeType: FOLDER_MIME,
     ...(parentId ? { parents: [parentId] } : {})
-  });
+  }, { fields: "id" });
   return carpeta.id;
+}
+
+// Carpeta raíz de trabajo: la configurada por el administrador o, si no hay
+// configuración, "SIGED Fotos" en el Drive del usuario.
+async function obtenerCarpetaRaiz() {
+  if (state.carpetas.has("")) return state.carpetas.get("");
+  const cfg = configActual();
+  let id = cfg.rootFolderId;
+  if (id) {
+    try {
+      await driveRequest("GET", `files/${id}`, null, { fields: "id" });
+    } catch (e) {
+      throw new Error(`No tienes acceso a la carpeta raíz "${cfg.rootFolderName}". Pide al administrador que la comparta contigo (${e.message}).`);
+    }
+  } else {
+    id = await encontrarOCrearCarpeta(cfg.rootFolderName || DRIVE_ROOT);
+  }
+  state.carpetas.set("", id);
+  return id;
+}
+
+// Resuelve (creando lo que falte) una ruta de carpetas bajo la raíz.
+async function resolverCarpeta(segmentos) {
+  let parentId = await obtenerCarpetaRaiz();
+  let clave = "";
+  for (const seg of segmentos) {
+    clave += `/${seg}`;
+    let id = state.carpetas.get(clave);
+    if (!id) {
+      id = await encontrarOCrearCarpeta(seg, parentId);
+      state.carpetas.set(clave, id);
+    }
+    parentId = id;
+  }
+  return parentId;
+}
+
+function rutaBaseNivel(nivel = nivelActual()) {
+  const cfg = configActual();
+  return [cfg.anioLectivo, NIVELES[nivel].carpeta];
+}
+
+function rutaLegible(grupo = state.grupoActual, nivel = nivelActual()) {
+  const cfg = configActual();
+  const partes = [cfg.rootFolderName || DRIVE_ROOT, cfg.anioLectivo, NIVELES[nivel].label];
+  if (grupo) partes.push(grupo);
+  return partes.join(" / ");
+}
+
+// Carpetas SIGED / HD / por cédula del grupo actual (se crean si no existen).
+function asegurarCarpetasGrupo() {
+  const nivel = nivelActual();
+  const grupo = state.grupoActual;
+  if (!grupo) return Promise.reject(new Error("Selecciona un grupo primero."));
+  const cfg = configActual();
+  const clave = `${cfg.anioLectivo}/${nivel}/${grupo}`;
+  if (state.grupoCarpetas?.clave === clave) return Promise.resolve(state.grupoCarpetas);
+  if (state.grupoCarpetasPromesa?.clave === clave) return state.grupoCarpetasPromesa.promesa;
+  const base = rutaBaseNivel(nivel);
+  const promesa = (async () => {
+    const siged = await resolverCarpeta([...base, SIGED_FOLDER_NAME, grupo]);
+    const hd = await resolverCarpeta([...base, HD_FOLDER_NAME, grupo]);
+    const cedula = await resolverCarpeta([...base, CEDULA_FOLDER_NAME, grupo]);
+    state.grupoCarpetas = { clave, siged, hd, cedula };
+    return state.grupoCarpetas;
+  })().finally(() => {
+    if (state.grupoCarpetasPromesa?.clave === clave) state.grupoCarpetasPromesa = null;
+  });
+  state.grupoCarpetasPromesa = { clave, promesa };
+  return promesa;
 }
 
 function base64ToBlob(b64, mime = "image/png") {
@@ -569,60 +983,70 @@ function blobToDataUrl(blob) {
   });
 }
 
-async function subirFotoADrive(doc, dataUrl) {
-  if (!state.driveToken || !state.driveGrupoId) return;
+async function descargarDataUrl(fileId) {
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`);
+  return blobToDataUrl(await res.blob());
+}
 
-  const blob = base64ToBlob(dataUrl.split(",")[1]);
-  const existingId = state.driveFiles.get(doc);
-  if (existingId) {
-    await driveFetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
-      { method: "PATCH", headers: { "Content-Type": "image/png" }, body: blob }
-    );
-  } else {
+// Sube una versión de la foto. Si el estudiante ya tiene archivo en Drive,
+// se actualiza ese mismo archivo (misma URL, se conserva el historial de
+// versiones de Drive) y se mandan a la papelera los duplicados viejos.
+async function subirVariante(mapa, carpetaId, doc, nombreArchivo, blob) {
+  const ids = mapa.get(doc) ?? [];
+  const armarForm = (meta) => {
     const form = new FormData();
-    form.append("metadata", new Blob([JSON.stringify({
-      name: `${doc}.png`, parents: [state.driveGrupoId]
-    })], { type: "application/json" }));
+    form.append("metadata", new Blob([JSON.stringify(meta)], { type: "application/json" }));
     form.append("file", blob);
-    const res = await driveFetch(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-      { method: "POST", body: form }
-    );
-    const file = await res.json();
-    if (file.id) state.driveFiles.set(doc, file.id);
+    return form;
+  };
+  let file = null;
+  if (ids.length) {
+    try {
+      const res = await driveFetch(
+        `https://www.googleapis.com/upload/drive/v3/files/${ids[0]}?uploadType=multipart&supportsAllDrives=true&fields=id,modifiedTime`,
+        { method: "PATCH", body: armarForm({ name: nombreArchivo }) }
+      );
+      file = await res.json();
+    } catch (e) {
+      // El archivo fue borrado por otro usuario: crear uno nuevo
+      if (e.status !== 404) throw e;
+      ids.length = 0;
+    }
   }
+  if (!file) {
+    const res = await driveFetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,modifiedTime",
+      { method: "POST", body: armarForm({ name: nombreArchivo, parents: [carpetaId] }) }
+    );
+    file = await res.json();
+  }
+  // Borrar (papelera) las copias viejas del mismo estudiante
+  for (const viejo of ids.slice(1)) {
+    if (viejo === file.id) continue;
+    try { await driveRequest("PATCH", `files/${viejo}`, { trashed: true }); } catch { /* ignorar */ }
+  }
+  mapa.set(doc, [file.id]);
+  return file;
 }
 
-async function subirFotoHDADrive(doc, nombre, dataUrl) {
-  if (!state.driveToken || !state.driveHDGrupoId) return;
-
-  const nombreArchivo = generarNombreHD(nombre, doc);
-  const blob = base64ToBlob(dataUrl.split(",")[1], "image/jpeg");
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify({
-    name: `${nombreArchivo}.jpg`, parents: [state.driveHDGrupoId]
-  })], { type: "application/json" }));
-  form.append("file", blob);
-  await driveFetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-    { method: "POST", body: form }
-  );
-}
-
-async function subirFotoCedulaADrive(doc, dataUrl) {
-  if (!state.driveToken || !state.driveCedulaGrupoId) return;
-
-  const blob = base64ToBlob(dataUrl.split(",")[1], "image/jpeg");
-  const form = new FormData();
-  form.append("metadata", new Blob([JSON.stringify({
-    name: `${doc}.jpg`, parents: [state.driveCedulaGrupoId]
-  })], { type: "application/json" }));
-  form.append("file", blob);
-  await driveFetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-    { method: "POST", body: form }
-  );
+// Sube las tres versiones de la foto de un estudiante al grupo actual.
+async function subirFotosDeEstudiante(doc, nombre, dataUrl, dataUrlHD, dataUrlMid) {
+  const carpetas = await asegurarCarpetasGrupo();
+  const [siged] = await Promise.all([
+    subirVariante(state.driveFiles, carpetas.siged, doc, `${doc}.png`, base64ToBlob(dataUrl.split(",")[1], "image/png")),
+    dataUrlHD
+      ? subirVariante(state.driveHDFiles, carpetas.hd, doc, `${generarNombreHD(nombre, doc)}.jpg`, base64ToBlob(dataUrlHD.split(",")[1], "image/jpeg"))
+      : Promise.resolve(null),
+    dataUrlMid
+      ? subirVariante(state.driveCedulaFiles, carpetas.cedula, doc, `${doc}.jpg`, base64ToBlob(dataUrlMid.split(",")[1], "image/jpeg"))
+      : Promise.resolve(null)
+  ]);
+  const fecha = Date.parse(siged.modifiedTime) || Date.now();
+  state.driveFechas.set(doc, fecha);
+  const meta = state.fotosMeta.get(doc) ?? {};
+  state.fotosMeta.set(doc, { ...meta, fecha, drive: true });
+  console.info(`[SIGED] ${state.driveUser?.email ?? "usuario"} subió foto de ${doc} (${nombre}) → ${rutaLegible()}`);
+  return siged;
 }
 
 function actualizarDrivePanel() {
@@ -633,18 +1057,25 @@ function actualizarDrivePanel() {
   }
   panel.hidden = false;
   const pathText = $("drive-path-text");
-  if (state.grupoActual && state.driveGrupoId) {
-    pathText.textContent = `${DRIVE_ROOT} / ${state.grupoActual}`;
-  } else if (state.driveFolderId) {
-    pathText.textContent = `${DRIVE_ROOT}`;
-  } else {
-    pathText.textContent = "Conectado — selecciona un grupo";
+  pathText.textContent = state.grupoActual ? rutaLegible() : `${rutaLegible("")} — selecciona un grupo`;
+  pathText.title = pathText.textContent;
+
+  const modo = $("drive-modo");
+  if (modo) {
+    if (state.configOrigen === "drive") {
+      modo.textContent = "Carpeta central del administrador";
+      modo.className = "drive-modo drive-modo--central";
+    } else {
+      modo.textContent = "Sin configuración central · Drive personal";
+      modo.className = "drive-modo drive-modo--local";
+    }
   }
 
   const syncCount = $("drive-sync-count");
   const totalDrive = state.driveFiles.size;
   if (totalDrive > 0) {
     syncCount.textContent = `${totalDrive} foto${totalDrive !== 1 ? "s" : ""} en Drive`;
+    syncCount.style.color = "var(--success)";
   } else if (state.grupoActual) {
     syncCount.textContent = "Sin fotos en Drive para este grupo";
     syncCount.style.color = "var(--muted)";
@@ -653,100 +1084,260 @@ function actualizarDrivePanel() {
   }
 }
 
+// Agrupa los archivos de una carpeta por documento (más reciente primero).
+function agruparPorDoc(files, extraerDoc) {
+  const mapa = new Map();
+  const ordenados = [...files].sort((a, b) => Date.parse(b.modifiedTime ?? 0) - Date.parse(a.modifiedTime ?? 0));
+  for (const f of ordenados) {
+    const doc = sanitizeDoc(extraerDoc(f.name) ?? "");
+    if (!doc) continue;
+    if (!mapa.has(doc)) mapa.set(doc, []);
+    mapa.get(doc).push(f.id);
+  }
+  return { mapa, ordenados };
+}
+
+async function listarImagenes(folderId) {
+  return listarArchivos(
+    `'${folderId}' in parents and trashed=false and (mimeType='image/png' or mimeType='image/jpeg')`,
+    "files(id,name,modifiedTime,lastModifyingUser(displayName,emailAddress))",
+    { orderBy: "modifiedTime desc" }
+  );
+}
+
+// Ejecuta tareas asíncronas con un máximo de concurrencia.
+async function enLotes(items, limite, fn) {
+  const cola = [...items];
+  const trabajadores = Array.from({ length: Math.min(limite, cola.length) }, async () => {
+    while (cola.length) await fn(cola.shift());
+  });
+  await Promise.all(trabajadores);
+}
+
+// Sincroniza el grupo con Drive: baja las fotos que tomó cualquier usuario,
+// sube las que este dispositivo tiene más nuevas y arma los índices de
+// archivos para poder reemplazarlos al retomar una foto.
 async function sincronizarFotosDeDrive(grupoNombre) {
-  if (!state.driveToken) return;
+  if (!state.driveToken || !grupoNombre) return;
   const statusEl = $("drive-status");
   if (statusEl) statusEl.textContent = "Sincronizando…";
   actualizarDrivePanel();
   try {
-    if (!state.driveFolderId) {
-      state.driveFolderId = await encontrarOCrearCarpeta(DRIVE_ROOT);
+    const carpetas = await asegurarCarpetasGrupo();
+    if (state.grupoActual !== grupoNombre) return; // cambió el grupo mientras tanto
+    const [sig, hd, ced] = await Promise.all([
+      listarImagenes(carpetas.siged),
+      listarImagenes(carpetas.hd),
+      listarImagenes(carpetas.cedula)
+    ]);
+    if (state.grupoActual !== grupoNombre) return;
+    const agrupSig = agruparPorDoc(sig, (n) => n.replace(/\.png$/i, ""));
+    state.driveFiles = agrupSig.mapa;
+    state.driveHDFiles = agruparPorDoc(hd, (n) => (n.match(/_(\d+)\.jpe?g$/i) ?? [])[1]).mapa;
+    state.driveCedulaFiles = agruparPorDoc(ced, (n) => n.replace(/\.jpe?g$/i, "")).mapa;
+    state.driveFechas = new Map();
+    for (const f of agrupSig.ordenados) {
+      const doc = sanitizeDoc(f.name.replace(/\.png$/i, ""));
+      if (doc && !state.driveFechas.has(doc)) state.driveFechas.set(doc, Date.parse(f.modifiedTime) || 0);
     }
-    state.driveGrupoId = await encontrarOCrearCarpeta(grupoNombre, state.driveFolderId);
-    // Pre-crear carpetas HD para que estén listas al capturar fotos
-    if (!state.driveHDFolderId) {
-      state.driveHDFolderId = await encontrarOCrearCarpeta(HD_FOLDER_NAME, state.driveFolderId);
-    }
-    state.driveHDGrupoId = await encontrarOCrearCarpeta(grupoNombre, state.driveHDFolderId);
-    if (!state.driveCedulaFolderId) {
-      state.driveCedulaFolderId = await encontrarOCrearCarpeta(CEDULA_FOLDER_NAME, state.driveFolderId);
-    }
-    state.driveCedulaGrupoId = await encontrarOCrearCarpeta(grupoNombre, state.driveCedulaFolderId);
-    state.driveFiles.clear();
     actualizarDrivePanel();
+    renderEstudiantes();
 
-    const q = `'${state.driveGrupoId}' in parents and trashed=false and mimeType='image/png'`;
-    const { files = [] } = await driveRequest("GET", "files", null, { q, fields: "files(id,name)" });
+    const cfg = configActual();
+    const nivel = nivelActual();
+    const aDescargar = [];
+    const aSubir = [];
+    const TOLERANCIA = 3000;
+    for (const [doc, ids] of state.driveFiles) {
+      const fechaDrive = state.driveFechas.get(doc) ?? 0;
+      const local = state.fotosMeta.get(doc);
+      const fechaLocal = state.fotos.has(doc) ? (local?.fecha ?? 0) : -1;
+      if (fechaLocal < 0 || fechaDrive > fechaLocal + TOLERANCIA) aDescargar.push({ doc, id: ids[0], fechaDrive });
+    }
+    // Fotos tomadas en este dispositivo (para este año) que aún no están en
+    // Drive o son más nuevas que la versión de Drive
+    for (const e of state.estudiantes) {
+      const doc = sanitizeDoc(e.Documento);
+      if (!state.fotos.has(doc)) continue;
+      const local = state.fotosMeta.get(doc);
+      if (!local || local.anio !== cfg.anioLectivo || local.nivel !== nivel || local.grupo !== grupoNombre) continue;
+      const fechaDrive = state.driveFechas.get(doc);
+      if (fechaDrive == null || local.fecha > fechaDrive + TOLERANCIA) aSubir.push({ doc, nombre: e.Nombre });
+    }
 
     let nuevas = 0;
-    for (const file of files) {
-      const doc = file.name.replace(/\.png$/i, "");
-      state.driveFiles.set(doc, file.id);
-      if (!state.fotos.has(doc)) {
-        const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`);
-        state.fotos.set(doc, await blobToDataUrl(await res.blob()));
+    await enLotes(aDescargar, 4, async ({ doc, id, fechaDrive }) => {
+      try {
+        state.fotos.set(doc, await descargarDataUrl(id));
+        state.fotosMeta.set(doc, { fecha: fechaDrive, anio: cfg.anioLectivo, nivel, grupo: grupoNombre, origen: "drive", drive: true });
+        await borrarVersionesLocales(doc);
         nuevas++;
+      } catch { /* seguir con las demás */ }
+    });
+    if (nuevas > 0) { guardarSesion(); renderEstudiantes(); actualizarPendientesYStats(); actualizarStudentPreview(); }
+
+    let subidas = 0;
+    for (const { doc, nombre } of aSubir) {
+      try {
+        await subirFotosDeEstudiante(doc, nombre, state.fotos.get(doc), state.fotosHD.get(doc), state.fotosCedula.get(doc));
+        subidas++;
+      } catch (e) {
+        console.warn("[SIGED] No se pudo subir foto pendiente", doc, e);
       }
     }
-    if (nuevas > 0) { guardarSesion(); renderEstudiantes(); actualizarPendientesYStats(); }
-    if (statusEl) statusEl.textContent = `Drive ✓ · ${files.length} foto${files.length !== 1 ? "s" : ""}`;
+    if (subidas > 0) { guardarSesion(); renderEstudiantes(); actualizarStudentPreview(); }
+
+    const total = state.driveFiles.size;
+    if (statusEl) statusEl.textContent = `Drive ✓ · ${total} foto${total !== 1 ? "s" : ""}`;
     actualizarDrivePanel();
-    if (nuevas > 0) toast(`${nuevas} foto${nuevas !== 1 ? "s" : ""} descargada${nuevas !== 1 ? "s" : ""} desde Drive.`, "success");
+    const msgs = [];
+    if (nuevas > 0) msgs.push(`${nuevas} descargada${nuevas !== 1 ? "s" : ""}`);
+    if (subidas > 0) msgs.push(`${subidas} subida${subidas !== 1 ? "s" : ""}`);
+    if (msgs.length) toast(`Drive sincronizado: ${msgs.join(", ")}.`, "success");
   } catch (err) {
     if (statusEl) statusEl.textContent = "Error de sincronización";
     toast(`Error al sincronizar con Drive: ${err.message}`, "error", 6000);
   }
 }
 
-async function cargarDesdeUrl(url, silencioso = false) {
+/* ── Carga de bases de datos ─────────────────────── */
+function esArchivoDatos(f) {
+  return f.mimeType === GSHEET_MIME
+    || /\.(xlsx|xls|csv)$/i.test(f.name ?? "")
+    || /spreadsheet|excel|csv/i.test(f.mimeType ?? "");
+}
+
+async function descargarArchivoDatos(archivo) {
+  if (archivo.mimeType === GSHEET_MIME) {
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${archivo.id}/export?mimeType=${encodeURIComponent(XLSX_MIME)}`);
+    return { buffer: await res.arrayBuffer(), xlsx: true };
+  }
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${archivo.id}?alt=media&supportsAllDrives=true`);
+  const xlsx = /\.xlsx?$/i.test(archivo.name ?? "") || /spreadsheet|excel/i.test(archivo.mimeType ?? "");
+  return { buffer: await res.arrayBuffer(), xlsx };
+}
+
+// Carga una base desde Drive. `id` puede ser una carpeta (se toma el
+// XLSX/CSV más reciente) o un archivo/Google Sheets.
+async function cargarBaseDesdeDrive(id, concatenarCurso) {
+  const meta = await driveRequest("GET", `files/${id}`, null, {
+    fields: "id,name,mimeType,modifiedTime,lastModifyingUser(displayName,emailAddress)"
+  });
+  let archivo = meta;
+  if (meta.mimeType === FOLDER_MIME) {
+    const files = await listarArchivos(
+      `'${id}' in parents and trashed=false and mimeType!='${FOLDER_MIME}'`,
+      "files(id,name,mimeType,modifiedTime,lastModifyingUser(displayName,emailAddress))",
+      { orderBy: "modifiedTime desc", max: 100 }
+    );
+    const candidatos = files.filter(esArchivoDatos);
+    if (!candidatos.length) throw new Error(`La carpeta "${meta.name}" no contiene archivos XLSX/CSV.`);
+    archivo = candidatos[0];
+  }
+  const { buffer, xlsx } = await descargarArchivoDatos(archivo);
+  const rows = xlsx
+    ? parseXLSX(buffer, concatenarCurso)
+    : parseCSV(new TextDecoder("utf-8").decode(buffer), concatenarCurso);
+  return {
+    rows,
+    descripcion: meta.mimeType === FOLDER_MIME ? `${meta.name} / ${archivo.name}` : archivo.name,
+    modificado: archivo.modifiedTime,
+    modificadoPor: nombreUsuario(archivo.lastModifyingUser)
+  };
+}
+
+async function cargarBaseDesdeUrlPublica(url, concatenarCurso) {
   const xlsx = esFormatoXlsx(url);
   const urlFinal = normalizarUrl(url);
-  if (!silencioso) toast("Cargando datos desde URL…", "info", 2000);
-  try {
-    let res;
-    // Para archivos de Google Drive, usar Drive API si hay sesión activa
-    const driveFileMatch = url.trim().match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
-    if (driveFileMatch && state.driveToken) {
-      // Con el permiso drive.file solo se pueden leer archivos creados por
-      // esta app; si la planilla es ajena, caer al enlace público de descarga.
-      try {
-        res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${driveFileMatch[1]}?alt=media`, {}, 1, false);
-      } catch {
-        res = await fetch(urlFinal);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      }
-    } else {
-      res = await fetch(urlFinal);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    }
+  const res = await fetch(urlFinal);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const rows = xlsx ? parseXLSX(await res.arrayBuffer(), concatenarCurso) : parseCSV(await res.text(), concatenarCurso);
+  return { rows, descripcion: url.length > 50 ? url.slice(0, 47) + "…" : url };
+}
 
-    const esSecundaria = $("nivel").value === "secundaria";
-    if (xlsx) {
-      const buffer = await res.arrayBuffer();
-      state.rows = parseXLSX(buffer, esSecundaria);
-    } else {
-      const text = await res.text();
-      state.rows = parseCSV(text, esSecundaria);
-    }
+function limpiarDatos() {
+  state.rows = [];
+  state.groups = [];
+  state.grupoActual = "";
+  state.estudiantes = [];
+  state.seleccion = null;
+  state.fuenteActual = null;
+  $("grupo").innerHTML = "";
+  $("grupo-actual").textContent = "No seleccionado";
+  $("estudiantes").innerHTML = "";
+  actualizarPendientesYStats();
+  actualizarStudentPreview();
+  actualizarDrivePanel();
+  $("estudiante-actual").textContent = "Estudiante: Ninguno seleccionado";
+}
 
-    state.groups = [...new Set(state.rows.map((r) => String(r.Grupo).trim()))].filter(Boolean).sort();
-    $("grupo").innerHTML = state.groups.map((g) => `<option value="${g}">${g}</option>`).join("");
-    if (state.groups.length) {
-      $("grupo").value = state.groups[0];
-      seleccionarGrupo();
-    }
-    const key = obtenerUrlKeyNivel();
-    localStorage.setItem(key, url);
-    $("csv-url").value = url;
-    actualizarStatusUrl(url);
-    toast(`Datos cargados: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "success");
-  } catch (err) {
-    if (url.match(/drive\.google\.com\/file\/d\//) && !state.driveToken) {
-      toast("Para archivos de Google Drive, inicia sesión con Google primero o sube el archivo directamente.", "error", 8000);
-    } else {
-      toast(`No se pudo cargar los datos: ${err.message}`, "error", 6000);
-    }
+function aplicarFilas(rows) {
+  state.rows = rows;
+  state.groups = [...new Set(rows.map((r) => String(r.Grupo).trim()))].filter(Boolean).sort();
+  $("grupo").innerHTML = state.groups.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join("");
+  if (state.groups.length) {
+    const recordado = localStorage.getItem(`${STORAGE_GRUPO_PREFIX}${nivelActual()}`);
+    $("grupo").value = state.groups.includes(recordado) ? recordado : state.groups[0];
+    seleccionarGrupo();
+  } else {
+    limpiarDatos();
   }
+}
+
+// Carga la fuente indicada (link de Drive, URL pública) para el nivel actual.
+async function cargarDesdeFuente(fuente, { silencioso = false, central = false, guardar = false } = {}) {
+  const nivel = nivelActual();
+  const concatenarCurso = NIVELES[nivel].concatenarCurso;
+  const driveId = extraerIdDrive(fuente);
+  if (!silencioso) toast("Cargando base de datos…", "info", 2000);
+  let info;
+  try {
+    if (driveId && state.driveToken) {
+      info = await cargarBaseDesdeDrive(driveId, concatenarCurso);
+    } else {
+      if (driveId && !/^https?:/i.test(fuente)) throw new Error("Conecta Drive para cargar esta base de datos.");
+      info = await cargarBaseDesdeUrlPublica(fuente, concatenarCurso);
+    }
+  } catch (err) {
+    if (driveId && !state.driveToken) {
+      toast("Conecta Drive para cargar la base de datos de este nivel (o sube el archivo manualmente).", "error", 7000);
+    } else {
+      toast(`No se pudo cargar la base de ${NIVELES[nivel].label}: ${err.message}`, "error", 7000);
+    }
+    actualizarStatusFuente();
+    return false;
+  }
+  if (nivelActual() !== nivel) return false; // el usuario cambió de nivel mientras cargaba
+  state.fuenteActual = { ...info, central, nivel };
+  aplicarFilas(info.rows);
+  if (guardar) {
+    localStorage.setItem(claveUrlNivel(nivel), fuente);
+    $("csv-url").value = fuente;
+    actualizarStatusUrl(fuente);
+  }
+  actualizarStatusFuente();
+  toast(`${NIVELES[nivel].label}: ${info.rows.length} estudiantes en ${state.groups.length} grupos.`, "success");
+  return true;
+}
+
+// Carga la base del nivel actual: primero la central del administrador,
+// si no existe la URL manual guardada en este navegador.
+async function cargarBaseNivel({ silencioso = false } = {}) {
+  const nivel = nivelActual();
+  const cfg = configActual();
+  const central = cfg.niveles?.[nivel]?.fuente?.trim() ?? "";
+  const manual = localStorage.getItem(claveUrlNivel(nivel)) ?? "";
+  $("csv-url").value = manual;
+  actualizarStatusUrl(manual);
+  if (central && (state.driveToken || !extraerIdDrive(central))) {
+    return cargarDesdeFuente(central, { silencioso, central: true });
+  }
+  if (manual) {
+    return cargarDesdeFuente(manual, { silencioso });
+  }
+  limpiarDatos();
+  actualizarStatusFuente();
+  return false;
 }
 
 function parseCsvLine(line) {
@@ -912,17 +1503,21 @@ async function activarCamara() {
 function seleccionarGrupo() {
   const grp = $("grupo").value;
   state.grupoActual = grp;
-  state.driveHDGrupoId = null;
-  state.driveCedulaGrupoId = null;
   state.estudiantes = state.rows.filter((r) => String(r.Grupo).trim() === grp.trim());
   state.seleccion = null;
+  state.driveFiles = new Map();
+  state.driveHDFiles = new Map();
+  state.driveCedulaFiles = new Map();
+  state.driveFechas = new Map();
+  if (grp) localStorage.setItem(`${STORAGE_GRUPO_PREFIX}${nivelActual()}`, grp);
   $("grupo-actual").textContent = grp || "No seleccionado";
   renderEstudiantes();
   actualizarPendientesYStats();
   actualizarStudentPreview();
+  actualizarDrivePanel();
   $("estudiante-actual").textContent = "Estudiante: Ninguno seleccionado";
   // Sincronizar fotos desde Drive si hay sesión activa
-  if (state.driveToken) sincronizarFotosDeDrive(grp).catch(() => {});
+  if (state.driveToken && grp) sincronizarFotosDeDrive(grp).catch(() => {});
 }
 
 function renderEstudiantes() {
@@ -947,7 +1542,7 @@ function renderEstudiantes() {
       const col = document.createElement("div");
       col.className = "student-info-col";
       const driveLabel = state.driveToken ? (enDrive ? " · Drive ✓" : " · Local") : "";
-      col.innerHTML = `<span class="student-name-row">${nombre} - ${doc}</span><span class="student-status-row status-done">Con foto${driveLabel}</span>`;
+      col.innerHTML = `<span class="student-name-row">${escapeHtml(nombre)} - ${escapeHtml(doc)}</span><span class="student-status-row status-done">Con foto${driveLabel}</span>`;
       li.appendChild(col);
     } else {
       li.classList.add("has-thumb");
@@ -958,7 +1553,7 @@ function renderEstudiantes() {
       li.appendChild(placeholder);
       const col = document.createElement("div");
       col.className = "student-info-col";
-      col.innerHTML = `<span class="student-name-row">${nombre} - ${doc}</span><span class="student-status-row">Sin foto</span>`;
+      col.innerHTML = `<span class="student-name-row">${escapeHtml(nombre)} - ${escapeHtml(doc)}</span><span class="student-status-row">Sin foto</span>`;
       li.appendChild(col);
     }
 
@@ -1003,7 +1598,8 @@ function actualizarStudentPreview() {
   if (state.driveToken) {
     badge.hidden = false;
     if (state.driveFiles.has(doc)) {
-      badge.textContent = "Subida a Drive";
+      const fecha = state.driveFechas.get(doc);
+      badge.textContent = fecha ? `En Drive · ${formatoFecha(fecha)}` : "Subida a Drive";
       badge.className = "sp-drive-badge drive-synced";
     } else if (tieneFoto) {
       badge.textContent = "Solo local";
@@ -1035,14 +1631,41 @@ function guardarFoto() {
   if (!state.seleccion) return toast("Selecciona un estudiante primero.", "error");
   if (!state.stream) return toast("Activa la cámara primero.", "error");
   const video = $("preview");
+  procesarYGuardarFoto(video, video.videoWidth || 320, video.videoHeight || 240, "camara");
+}
+
+// Sube una imagen elegida del dispositivo como foto del estudiante seleccionado.
+async function subirFotoDesdeArchivo(file) {
+  if (!file) return;
+  if (!state.seleccion) return toast("Selecciona un estudiante primero.", "error");
+  if (!/^image\//.test(file.type)) return toast("El archivo debe ser una imagen.", "error");
+  let fuente;
+  try {
+    // imageOrientation aplica la rotación EXIF de las fotos de celular
+    fuente = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    fuente = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("No se pudo leer la imagen."));
+      img.src = URL.createObjectURL(file);
+    }).catch((e) => { toast(e.message, "error"); return null; });
+    if (!fuente) return;
+  }
+  const w = fuente.width ?? fuente.naturalWidth;
+  const h = fuente.height ?? fuente.naturalHeight;
+  procesarYGuardarFoto(fuente, w, h, "archivo");
+  fuente.close?.();
+}
+
+// Recorta al centro, genera las tres versiones, las guarda en el dispositivo
+// y las sube a Drive reemplazando la foto anterior del estudiante.
+function procesarYGuardarFoto(fuente, vw, vh, origen) {
   const canvas = $("captura");
-  // Capture at full camera resolution
-  const vw = video.videoWidth || 320;
-  const vh = video.videoHeight || 240;
   canvas.width = vw;
   canvas.height = vh;
   const ctx = canvas.getContext("2d");
-  ctx.drawImage(video, 0, 0, vw, vh);
+  ctx.drawImage(fuente, 0, 0, vw, vh);
 
   // Center crop: tomar el cuadrado más grande del centro del frame
   const cropSize = Math.min(vw, vh);
@@ -1071,9 +1694,14 @@ function guardarFoto() {
   const dataUrlMid = outMid.toDataURL("image/jpeg", MID_QUALITY);
 
   const doc = sanitizeDoc(state.seleccion.Documento);
+  const cfg = configActual();
+  const reemplaza = state.fotos.has(doc) || state.driveFiles.has(doc);
   state.fotos.set(doc, dataUrl);
   state.fotosHD.set(doc, dataUrlHD);
   state.fotosCedula.set(doc, dataUrlMid);
+  state.fotosMeta.set(doc, {
+    fecha: Date.now(), anio: cfg.anioLectivo, nivel: nivelActual(), grupo: state.grupoActual, origen, drive: false
+  });
 
   const ultima = $("ultima-foto").getContext("2d");
   const img = new Image();
@@ -1096,46 +1724,21 @@ function guardarFoto() {
 
   // Subir a Drive automáticamente si hay sesión activa
   if (state.driveToken) {
-    toast(`Foto guardada: ${nombreEst}. Subiendo a Drive…`, "info", 2000);
+    toast(`Foto ${reemplaza ? "reemplazada" : "guardada"}: ${nombreEst}. Subiendo a Drive…`, "info", 2000);
     (async () => {
       try {
-        // Pre-crear todas las carpetas de Drive secuencialmente para evitar race conditions
-        if (!state.driveFolderId) {
-          state.driveFolderId = await encontrarOCrearCarpeta(DRIVE_ROOT);
-        }
-        if (!state.driveGrupoId && state.grupoActual) {
-          state.driveGrupoId = await encontrarOCrearCarpeta(state.grupoActual, state.driveFolderId);
-          actualizarDrivePanel();
-        }
-        if (!state.driveHDFolderId) {
-          state.driveHDFolderId = await encontrarOCrearCarpeta(HD_FOLDER_NAME, state.driveFolderId);
-        }
-        if (!state.driveHDGrupoId && state.grupoActual) {
-          state.driveHDGrupoId = await encontrarOCrearCarpeta(state.grupoActual, state.driveHDFolderId);
-        }
-        if (!state.driveCedulaFolderId) {
-          state.driveCedulaFolderId = await encontrarOCrearCarpeta(CEDULA_FOLDER_NAME, state.driveFolderId);
-        }
-        if (!state.driveCedulaGrupoId && state.grupoActual) {
-          state.driveCedulaGrupoId = await encontrarOCrearCarpeta(state.grupoActual, state.driveCedulaFolderId);
-        }
-        // Subir las tres fotos en paralelo (las carpetas ya existen)
-        await Promise.all([
-          subirFotoADrive(doc, dataUrl),
-          subirFotoHDADrive(doc, nombreEst, dataUrlHD),
-          subirFotoCedulaADrive(doc, dataUrlMid)
-        ]);
+        await subirFotosDeEstudiante(doc, nombreEst, dataUrl, dataUrlHD, dataUrlMid);
+        guardarSesion();
         actualizarStudentPreview();
         actualizarDrivePanel();
         renderEstudiantes();
-        const ruta = state.grupoActual ? `${DRIVE_ROOT} / ${state.grupoActual}` : DRIVE_ROOT;
-        toast(`Subida a Drive: ${doc}.png → ${ruta} (+ HD)`, "success", 4000);
+        toast(`${reemplaza ? "Foto reemplazada" : "Subida"} en Drive: ${doc}.png → ${rutaLegible()} (+ HD y por cédula)`, "success", 4000);
       } catch (e) {
         toast(`No se pudo subir a Drive: ${e.message}`, "error", 5000);
       }
     })();
   } else {
-    toast(`Foto guardada: ${nombreEst} (SIGED + HD)`, "success");
+    toast(`Foto ${reemplaza ? "reemplazada" : "guardada"}: ${nombreEst} (SIGED + HD)`, "success");
   }
 }
 
@@ -1173,17 +1776,28 @@ function downloadBlob(name, blob) {
 async function comprimirGrupo() {
   if (!state.grupoActual) return toast("Selecciona un grupo primero.", "error");
   const zip = new JSZip();
-  const folderSiged = zip.folder("SIGED");
+  const folderSiged = zip.folder(SIGED_FOLDER_NAME);
   const folderHD = zip.folder(HD_FOLDER_NAME);
   const folderCedula = zip.folder(CEDULA_FOLDER_NAME);
   let countHD = 0;
   let countCedula = 0;
+  let descargadas = 0;
+  toast("Preparando ZIP…", "info", 2000);
   for (const e of state.estudiantes) {
     const doc = sanitizeDoc(e.Documento);
     if (!state.fotos.has(doc)) continue;
     // SIGED: 100x100 PNG nombrada por documento
     const data = state.fotos.get(doc).split(",")[1];
     folderSiged.file(`${doc}.png`, data, { base64: true });
+    // Versiones tomadas por otros usuarios: bajarlas de Drive
+    if (state.driveToken) {
+      if (!state.fotosHD.has(doc) && state.driveHDFiles.has(doc)) {
+        try { state.fotosHD.set(doc, await descargarDataUrl(state.driveHDFiles.get(doc)[0])); descargadas++; } catch { /* ignorar */ }
+      }
+      if (!state.fotosCedula.has(doc) && state.driveCedulaFiles.has(doc)) {
+        try { state.fotosCedula.set(doc, await descargarDataUrl(state.driveCedulaFiles.get(doc)[0])); descargadas++; } catch { /* ignorar */ }
+      }
+    }
     // HD: 1080x1080 JPEG nombrada por nombre_apellido_cédula
     if (state.fotosHD.has(doc)) {
       const nombreArchivo = generarNombreHD(e.Nombre, e.Documento);
@@ -1203,13 +1817,16 @@ async function comprimirGrupo() {
       countCedula++;
     }
   }
+  if (descargadas > 0) guardarSesionHD();
   const blob = await zip.generateAsync({ type: "blob" });
-  downloadBlob(`${state.grupoActual}.zip`, blob);
+  const cfg = configActual();
+  const nombreZip = `${cfg.anioLectivo}_${NIVELES[nivelActual()].label}_${state.grupoActual}.zip`;
+  downloadBlob(nombreZip, blob);
   const extras = [];
   if (countHD > 0) extras.push(`${countHD} HD`);
   if (countCedula > 0) extras.push(`${countCedula} por cédula`);
   const extraMsg = extras.length ? ` (+ ${extras.join(", ")})` : "";
-  toast(`ZIP generado: ${state.grupoActual}.zip${extraMsg}`, "success");
+  toast(`ZIP generado: ${nombreZip}${extraMsg}`, "success");
 }
 
 function generarPdfAsistencia() {
@@ -1264,7 +1881,7 @@ function generarPdfAsistencia() {
     pdf.setFontSize(7.5);
     const hcY = y + headerH / 2 + 1.5;
     let x = margin;
-    pdf.text("N\u00b0", x + colNum / 2, hcY, { align: "center" });
+    pdf.text("N°", x + colNum / 2, hcY, { align: "center" });
     x += colNum;
     pdf.line(x, y, x, y + headerH);
     pdf.text("NOMBRE - DOCUMENTO", x + 2, hcY);
@@ -1415,6 +2032,553 @@ function exportarTodos() {
   toast("Reporte completo exportado.", "success");
 }
 
+/* ── Panel de administración ─────────────────────── */
+function abrirAdmin() {
+  mostrarVista("gestion");
+}
+
+function prepararConfigAdmin() {
+  const cfg = configActual();
+  $("adm-anio").value = cfg.anioLectivo;
+  $("adm-root").value = cfg.rootFolderId ? linkCarpetaDrive(cfg.rootFolderId) : "";
+  Object.keys(NIVELES).forEach((n) => { $(`adm-fuente-${n}`).value = cfg.niveles?.[n]?.fuente ?? ""; });
+  $("admin-guardar-status").textContent = "";
+  $("admin-guardar-status").className = "field-status";
+  actualizarEstructuraAdmin();
+  actualizarMetaAdmin();
+}
+
+function actualizarMetaAdmin() {
+  const cfg = configActual();
+  const el = $("admin-meta");
+  if (state.configOrigen === "drive" && cfg.actualizadoEn) {
+    el.innerHTML = `Configuración central guardada en Drive · última modificación ${escapeHtml(formatoFecha(cfg.actualizadoEn))} por ${escapeHtml(cfg.actualizadoPor || "—")}.`;
+  } else {
+    el.textContent = "Todavía no hay configuración central en Drive. Al guardar se creará el archivo siged-config.json en la carpeta raíz.";
+  }
+  const links = $("admin-links");
+  const partes = [];
+  if (cfg.rootFolderId) partes.push(`<a href="${linkCarpetaDrive(cfg.rootFolderId)}" target="_blank" rel="noopener">Abrir carpeta raíz en Drive</a>`);
+  if (state.configFileId) partes.push(`<a href="https://drive.google.com/file/d/${state.configFileId}/view" target="_blank" rel="noopener">Ver siged-config.json</a>`);
+  links.innerHTML = partes.join(" · ");
+}
+
+function actualizarEstructuraAdmin() {
+  const anio = $("adm-anio").value.trim() || String(new Date().getFullYear());
+  const rootTexto = $("adm-root").value.trim();
+  const cfg = configActual();
+  const rootNombre = rootTexto ? (extraerIdDrive(rootTexto) === cfg.rootFolderId ? cfg.rootFolderName : "(carpeta elegida)") : DRIVE_ROOT;
+  $("adm-estructura").textContent = `${rootNombre} / ${anio} / Primaria / ${SIGED_FOLDER_NAME} / 3A / 12345678.png`;
+}
+
+async function guardarAdmin() {
+  const btn = $("btn-admin-guardar");
+  const status = $("admin-guardar-status");
+  const anio = $("adm-anio").value.trim();
+  if (!/^\d{4}$/.test(anio)) {
+    status.textContent = "El año lectivo debe tener 4 dígitos (ej. 2026).";
+    status.className = "field-status field-status--error";
+    return;
+  }
+  const rootTexto = $("adm-root").value.trim();
+  const rootId = rootTexto ? extraerIdDrive(rootTexto) : "";
+  if (rootTexto && !rootId) {
+    status.textContent = "El link de la carpeta raíz no es válido.";
+    status.className = "field-status field-status--error";
+    return;
+  }
+  const cfg = normalizarConfig({
+    ...configActual(),
+    anioLectivo: anio,
+    rootFolderId: rootId,
+    rootFolderName: rootId && rootId === configActual().rootFolderId ? configActual().rootFolderName : DRIVE_ROOT,
+    niveles: Object.fromEntries(Object.keys(NIVELES).map((n) => [n, { fuente: $(`adm-fuente-${n}`).value.trim() }]))
+  });
+  btn.disabled = true;
+  status.textContent = "Guardando y creando carpetas del año…";
+  status.className = "field-status";
+  try {
+    await guardarConfiguracionCentral(cfg);
+    status.textContent = `✓ Guardado. Estructura ${cfg.anioLectivo} creada en "${cfg.rootFolderName}".`;
+    status.className = "field-status field-status--ok";
+    $("adm-root").value = linkCarpetaDrive(cfg.rootFolderId);
+    actualizarMetaAdmin();
+    actualizarEstructuraAdmin();
+    actualizarDrivePanel();
+    toast("Configuración central guardada en Drive.", "success");
+    state.registro = null;
+    state.inventario = null;
+    $("gz-anio").textContent = cfg.anioLectivo;
+    // Recargar base y fotos con la nueva configuración
+    await cargarBaseNivel({ silencioso: true });
+    if (!state.rows.length && state.grupoActual) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
+  } catch (e) {
+    status.textContent = `Error: ${e.message}`;
+    status.className = "field-status field-status--error";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Registro de actividad: quién fue el último en subir/modificar fotos en
+// cada grupo del año lectivo, según los metadatos de Drive
+// (lastModifyingUser / modifiedTime de cada archivo).
+// Inventario del año lectivo en Drive: carpetas de grupo por nivel y las
+// fotos SIGED que contienen (una sola consulta paginada, filtrada por carpeta).
+async function obtenerInventario(forzar = false) {
+  const cfg = configActual();
+  if (!forzar && state.inventario?.anio === cfg.anioLectivo && Date.now() - state.inventario.generado < 60000) return state.inventario;
+  const rootId = await obtenerCarpetaRaiz();
+  const anioId = await buscarCarpeta(cfg.anioLectivo, rootId);
+  const grupos = new Map(); // folderId => info
+  if (anioId) {
+    for (const [key, n] of Object.entries(NIVELES)) {
+      const nivelId = await buscarCarpeta(n.carpeta, anioId);
+      if (!nivelId) continue;
+      const sigedId = await buscarCarpeta(SIGED_FOLDER_NAME, nivelId);
+      if (!sigedId) continue;
+      const carpetas = await listarArchivos(
+        `'${sigedId}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`,
+        "files(id,name,createdTime,lastModifyingUser(displayName,emailAddress))",
+        { orderBy: "name" }
+      );
+      carpetas.forEach((c) => grupos.set(c.id, {
+        nivelKey: key, nivel: n.label, grupo: c.name, carpetaId: c.id, creada: c.createdTime, creadaPor: nombreUsuario(c.lastModifyingUser),
+        fotos: 0, ultimo: null, ultimoPor: "—", docs: []
+      }));
+    }
+  }
+  const desde = `${Number(cfg.anioLectivo) - 1}-12-01T00:00:00`;
+  const fotos = grupos.size
+    ? await listarArchivos(
+      `mimeType='image/png' and trashed=false and modifiedTime > '${desde}'`,
+      "files(id,name,parents,modifiedTime,createdTime,lastModifyingUser(displayName,emailAddress))",
+      { orderBy: "modifiedTime desc", max: 5000, pageSize: 500 }
+    )
+    : [];
+  const recientes = [];
+  for (const f of fotos) {
+    const padre = (f.parents ?? []).find((p) => grupos.has(p));
+    if (!padre) continue;
+    const g = grupos.get(padre);
+    g.fotos++;
+    g.docs.push(sanitizeDoc(f.name.replace(/\.png$/i, "")));
+    const t = Date.parse(f.modifiedTime) || 0;
+    if (!g.ultimo || t > g.ultimo) { g.ultimo = t; g.ultimoPor = nombreUsuario(f.lastModifyingUser); }
+    recientes.push({ archivo: f.name, nivel: g.nivel, grupo: g.grupo, fecha: t, usuario: nombreUsuario(f.lastModifyingUser), nuevo: f.createdTime === f.modifiedTime });
+  }
+  state.inventario = { anio: cfg.anioLectivo, anioId, generado: Date.now(), grupos, recientes };
+  return state.inventario;
+}
+
+// Registro de actividad: quién fue el último en subir/modificar fotos en
+// cada grupo del año lectivo, según los metadatos de Drive
+// (lastModifyingUser / modifiedTime de cada archivo).
+async function cargarRegistroActividad(forzar = true) {
+  const status = $("admin-registro-status");
+  const btn = $("btn-admin-registro");
+  btn.disabled = true;
+  status.textContent = "Consultando Drive…";
+  status.className = "field-status";
+  try {
+    const cfg = configActual();
+    const inv = await obtenerInventario(forzar);
+    const filas = [...inv.grupos.values()].sort((a, b) => (b.ultimo ?? 0) - (a.ultimo ?? 0));
+    state.registro = { generado: Date.now(), filas, recientes: inv.recientes.slice(0, 60), totalFotos: inv.recientes.length };
+    renderRegistroActividad();
+    status.textContent = inv.anioId
+      ? `✓ ${filas.length} grupo${filas.length !== 1 ? "s" : ""} · ${inv.recientes.length} foto${inv.recientes.length !== 1 ? "s" : ""} en ${cfg.anioLectivo} · ${formatoFecha(Date.now())}`
+      : `La carpeta del año ${cfg.anioLectivo} todavía no existe en "${cfg.rootFolderName}".`;
+    status.className = "field-status field-status--ok";
+    console.info(`[SIGED] Registro de actividad ${cfg.anioLectivo}`);
+    console.table(filas.map((f) => ({ Nivel: f.nivel, Grupo: f.grupo, Fotos: f.fotos, "Último cambio": formatoFecha(f.ultimo), "Por": f.ultimoPor })));
+  } catch (e) {
+    status.textContent = `No se pudo cargar el registro: ${e.message}`;
+    status.className = "field-status field-status--error";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderRegistroActividad() {
+  const tbody = $("admin-tabla-grupos").querySelector("tbody");
+  const lista = $("admin-ultimos");
+  const reg = state.registro;
+  if (!reg) { tbody.innerHTML = ""; lista.innerHTML = ""; return; }
+  tbody.innerHTML = reg.filas.map((f) => `
+    <tr>
+      <td>${escapeHtml(f.nivel)}</td>
+      <td><a href="${linkCarpetaDrive(f.carpetaId)}" target="_blank" rel="noopener">${escapeHtml(f.grupo)}</a></td>
+      <td class="num">${f.fotos}</td>
+      <td>${escapeHtml(formatoFecha(f.ultimo))}</td>
+      <td>${escapeHtml(f.ultimoPor)}</td>
+    </tr>`).join("") || `<tr><td colspan="5" class="admin-empty">Sin grupos con fotos todavía.</td></tr>`;
+  lista.innerHTML = reg.recientes.map((r) => `
+    <li>
+      <span class="admin-log-fecha">${escapeHtml(formatoFecha(r.fecha))}</span>
+      <span class="admin-log-archivo">${escapeHtml(r.archivo)}</span>
+      <span class="admin-log-grupo">${escapeHtml(r.nivel)} / ${escapeHtml(r.grupo)}</span>
+      <span class="admin-log-usuario">${escapeHtml(r.usuario)}${r.nuevo ? "" : " · reemplazo"}</span>
+    </li>`).join("") || `<li class="admin-empty">Sin actividad registrada.</li>`;
+}
+
+/* ── Vistas (Tomar fotos / Gestión) ──────────────── */
+function mostrarVista(vista) {
+  if (!["fotos", "gestion"].includes(vista)) vista = "fotos";
+  state.vista = vista;
+  const esGestion = vista === "gestion";
+  $("vista-fotos").hidden = esGestion;
+  $("vista-gestion").hidden = !esGestion;
+  document.body.classList.toggle("en-gestion", esGestion);
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.vista === vista));
+  if (location.hash !== `#${vista}`) history.replaceState(null, "", `#${vista}`);
+  if (esGestion) prepararGestion();
+  window.scrollTo({ top: 0 });
+}
+
+function prepararGestion() {
+  const conectado = !!state.driveToken;
+  const cfg = configActual();
+  $("gestion-sin-drive").hidden = conectado;
+  $("g-zip").hidden = !conectado;
+  $("g-migrar").hidden = !conectado;
+  $("g-config").hidden = !(conectado && state.esAdmin);
+  $("g-registro").hidden = !(conectado && state.esAdmin);
+  $("gz-anio").textContent = cfg.anioLectivo;
+  if (!$("mig-anio").value) $("mig-anio").value = cfg.anioLectivo;
+  if ($("gz-nivel").value !== nivelActual() && !state.inventario) $("gz-nivel").value = nivelActual();
+  if ($("mig-nivel").value !== nivelActual() && !state.migracionPlan) $("mig-nivel").value = nivelActual();
+  if (!conectado) return;
+  if (state.esAdmin) {
+    prepararConfigAdmin();
+    if (!state.registro) cargarRegistroActividad(false).catch(() => {});
+  }
+  if (!state.inventario) cargarGruposZip().catch(() => {});
+  else renderGruposZip();
+}
+
+/* ── Gestión: ZIP por grupos desde Drive ─────────── */
+const VERSIONES_ZIP = {
+  hd:     { carpeta: HD_FOLDER_NAME,     ext: "jpg", extraer: (n) => (n.match(/_(\d+)\.jpe?g$/i) ?? [])[1] ?? n.replace(/\.jpe?g$/i, ""), label: "alta resolución" },
+  cedula: { carpeta: CEDULA_FOLDER_NAME, ext: "jpg", extraer: (n) => n.replace(/\.jpe?g$/i, ""), label: "peso reducido" },
+  siged:  { carpeta: SIGED_FOLDER_NAME,  ext: "png", extraer: (n) => n.replace(/\.png$/i, ""), label: "SIGED" }
+};
+
+async function cargarGruposZip() {
+  const status = $("gz-status");
+  status.textContent = "Leyendo grupos del año en Drive…";
+  status.className = "field-status";
+  try {
+    await obtenerInventario(true);
+    renderGruposZip();
+    status.textContent = "";
+  } catch (e) {
+    status.textContent = `No se pudieron leer los grupos: ${e.message}`;
+    status.className = "field-status field-status--error";
+  }
+}
+
+function gruposDelNivel(nivelKey) {
+  if (!state.inventario) return [];
+  return [...state.inventario.grupos.values()]
+    .filter((g) => g.nivelKey === nivelKey)
+    .sort((a, b) => a.grupo.localeCompare(b.grupo, "es", { numeric: true }));
+}
+
+function renderGruposZip() {
+  const ul = $("gz-grupos");
+  const nivelKey = $("gz-nivel").value;
+  const grupos = gruposDelNivel(nivelKey);
+  // Conservar lo marcado si la lista se vuelve a dibujar (recarga, etc.)
+  const marcados = new Set([...ul.querySelectorAll(".gz-grupo:checked")].map((cb) => cb.dataset.grupo));
+  ul.innerHTML = grupos.map((g) => `
+    <li>
+      <label>
+        <input type="checkbox" class="gz-grupo" value="${escapeHtml(g.carpetaId)}" data-grupo="${escapeHtml(g.grupo)}"${marcados.has(g.grupo) ? " checked" : ""} />
+        <span class="check-nombre">${escapeHtml(g.grupo)}</span>
+        <span class="check-detalle">${g.fotos} foto${g.fotos !== 1 ? "s" : ""}${g.ultimo ? ` · ${formatoFecha(g.ultimo)} · ${escapeHtml(g.ultimoPor)}` : ""}</span>
+      </label>
+    </li>`).join("") || `<li class="admin-empty">No hay grupos con carpeta en ${NIVELES[nivelKey].label} para ${configActual().anioLectivo}.</li>`;
+  const cbs = ul.querySelectorAll(".gz-grupo");
+  $("gz-todos").checked = cbs.length > 0 && [...cbs].every((cb) => cb.checked);
+  actualizarResumenZip();
+}
+
+function actualizarResumenZip() {
+  const marcados = [...document.querySelectorAll(".gz-grupo:checked")];
+  const total = marcados.reduce((acc, cb) => acc + (state.inventario?.grupos.get(cb.value)?.fotos ?? 0), 0);
+  $("gz-resumen").textContent = marcados.length
+    ? `${marcados.length} grupo${marcados.length !== 1 ? "s" : ""} · ${total} estudiante${total !== 1 ? "s" : ""} con foto`
+    : "Marca los grupos que quieres descargar.";
+}
+
+async function generarZipGestion() {
+  const nivelKey = $("gz-nivel").value;
+  const grupos = [...document.querySelectorAll(".gz-grupo:checked")].map((cb) => ({ id: cb.value, nombre: cb.dataset.grupo }));
+  const versiones = Object.keys(VERSIONES_ZIP).filter((v) => $(`gz-v-${v}`).checked);
+  const status = $("gz-status");
+  const btn = $("btn-gz-generar");
+  if (!grupos.length) { status.textContent = "Marca al menos un grupo."; status.className = "field-status field-status--error"; return; }
+  if (!versiones.length) { status.textContent = "Marca al menos una versión."; status.className = "field-status field-status--error"; return; }
+  const carpetaPorGrupo = $("gz-carpeta-grupo").checked;
+  const cfg = configActual();
+  const base = rutaBaseNivel(nivelKey);
+  btn.disabled = true;
+  status.className = "field-status";
+  try {
+    // Recolectar archivos
+    const tareas = [];
+    for (const g of grupos) {
+      for (const v of versiones) {
+        const def = VERSIONES_ZIP[v];
+        const carpetaId = v === "siged" ? g.id : await buscarCarpetaRuta([...base, def.carpeta, g.nombre]);
+        if (!carpetaId) continue;
+        const archivos = await listarImagenes(carpetaId);
+        const vistos = new Set();
+        for (const f of archivos) { // más reciente primero: una foto por cédula
+          const doc = sanitizeDoc(def.extraer(f.name) ?? "");
+          if (!doc || vistos.has(doc)) continue;
+          vistos.add(doc);
+          const partes = [];
+          if (versiones.length > 1) partes.push(def.carpeta);
+          if (carpetaPorGrupo) partes.push(g.nombre);
+          partes.push(`${doc}.${def.ext}`);
+          tareas.push({ id: f.id, ruta: partes.join("/") });
+        }
+      }
+    }
+    if (!tareas.length) throw new Error("No hay fotos en Drive para los grupos y versiones elegidos.");
+    const zip = new JSZip();
+    let hechas = 0;
+    let fallidas = 0;
+    await enLotes(tareas, 4, async (t) => {
+      try {
+        const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${t.id}?alt=media&supportsAllDrives=true`);
+        zip.file(t.ruta, await res.blob());
+      } catch { fallidas++; }
+      hechas++;
+      status.textContent = `Descargando ${hechas}/${tareas.length}…`;
+    });
+    status.textContent = "Comprimiendo…";
+    const blob = await zip.generateAsync({ type: "blob" });
+    const nombre = `${cfg.anioLectivo}_${NIVELES[nivelKey].label}_${grupos.length === 1 ? grupos[0].nombre : "fotos"}.zip`;
+    downloadBlob(nombre, blob);
+    status.textContent = `✓ ${nombre} · ${tareas.length - fallidas} archivo${tareas.length - fallidas !== 1 ? "s" : ""}${fallidas ? ` · ${fallidas} con error` : ""}`;
+    status.className = "field-status field-status--ok";
+    toast(`ZIP generado: ${nombre}`, "success");
+  } catch (e) {
+    status.textContent = `Error: ${e.message}`;
+    status.className = "field-status field-status--error";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Busca una ruta de carpetas bajo la raíz sin crear nada.
+async function buscarCarpetaRuta(segmentos) {
+  let parentId = await obtenerCarpetaRaiz();
+  let clave = "";
+  for (const seg of segmentos) {
+    clave += `/${seg}`;
+    let id = state.carpetas.get(clave);
+    if (!id) {
+      id = await buscarCarpeta(seg, parentId);
+      if (!id) return null;
+      state.carpetas.set(clave, id);
+    }
+    parentId = id;
+  }
+  return parentId;
+}
+
+/* ── Gestión: migración de carpetas anteriores ───── */
+// Estructuras reconocidas:
+//  (a) versión anterior: <carpeta>/<grupo>/<doc>.png,
+//      <carpeta>/imagenes de estudiantes alta resolución/<grupo>/<nombre_doc>.jpg,
+//      <carpeta>/imagenes por cédula/<grupo>/<doc>.jpg
+//  (b) carpeta de nivel del sistema nuevo: <carpeta>/SIGED/<grupo>, <carpeta>/<HD>/<grupo>, ...
+//  (c) una sola carpeta de grupo con los PNG directamente adentro.
+async function analizarCarpetaAntigua(link) {
+  const id = extraerIdDrive(link);
+  if (!id) throw new Error("El link no parece de una carpeta de Drive.");
+  const meta = await driveRequest("GET", `files/${id}`, null, { fields: "id,name,mimeType" });
+  if (meta.mimeType !== FOLDER_MIME) throw new Error("El link no corresponde a una carpeta.");
+  const hijos = await listarArchivos(`'${id}' in parents and trashed=false`, "files(id,name,mimeType)", { orderBy: "name" });
+  const subcarpetas = hijos.filter((h) => h.mimeType === FOLDER_MIME);
+  const pngsDirectos = hijos.filter((h) => h.mimeType === "image/png");
+  const porNombre = (n) => subcarpetas.find((c) => c.name === n);
+  const hdRoot = porNombre(HD_FOLDER_NAME);
+  const cedRoot = porNombre(CEDULA_FOLDER_NAME);
+  const sigedRoot = porNombre(SIGED_FOLDER_NAME);
+
+  let gruposSiged;
+  if (sigedRoot) {
+    gruposSiged = await listarArchivos(`'${sigedRoot.id}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`, "files(id,name)", { orderBy: "name" });
+  } else {
+    gruposSiged = subcarpetas.filter((c) => ![HD_FOLDER_NAME, CEDULA_FOLDER_NAME].includes(c.name));
+    if (!gruposSiged.length && pngsDirectos.length) gruposSiged = [{ id: meta.id, name: meta.name }];
+  }
+  if (!gruposSiged.length) throw new Error(`No se encontraron carpetas de grupo con fotos en "${meta.name}".`);
+
+  const hdGrupos = hdRoot ? await listarArchivos(`'${hdRoot.id}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`, "files(id,name)") : [];
+  const cedGrupos = cedRoot ? await listarArchivos(`'${cedRoot.id}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`, "files(id,name)") : [];
+
+  const plan = [];
+  for (const g of gruposSiged) {
+    const hd = hdGrupos.find((c) => c.name === g.name);
+    const ced = cedGrupos.find((c) => c.name === g.name);
+    const [fSiged, fHD, fCed] = await Promise.all([
+      listarImagenes(g.id),
+      hd ? listarImagenes(hd.id) : [],
+      ced ? listarImagenes(ced.id) : []
+    ]);
+    const siged = fSiged.filter((f) => /\.png$/i.test(f.name));
+    if (!siged.length && !fHD.length && !fCed.length) continue;
+    plan.push({ grupo: g.name, siged, hd: fHD, cedula: fCed });
+  }
+  if (!plan.length) throw new Error(`Las carpetas de "${meta.name}" no contienen fotos.`);
+  return { origen: meta, plan };
+}
+
+function renderPlanMigracion() {
+  const ul = $("mig-grupos");
+  const plan = state.migracionPlan?.plan ?? [];
+  ul.innerHTML = plan.map((g, i) => `
+    <li>
+      <label>
+        <input type="checkbox" class="mig-grupo" value="${i}" checked />
+        <span class="check-nombre">${escapeHtml(g.grupo)}</span>
+        <span class="check-detalle">${g.siged.length} SIGED · ${g.hd.length} alta resolución · ${g.cedula.length} por cédula</span>
+      </label>
+      <span class="check-estado" id="mig-estado-${i}"></span>
+    </li>`).join("");
+  $("mig-todos").checked = true;
+  $("btn-mig-migrar").disabled = !plan.length;
+  const total = plan.reduce((a, g) => a + g.siged.length + g.hd.length + g.cedula.length, 0);
+  $("mig-resumen").textContent = plan.length
+    ? `${plan.length} grupo${plan.length !== 1 ? "s" : ""} en "${state.migracionPlan.origen.name}" · ${total} archivo${total !== 1 ? "s" : ""}`
+    : "";
+}
+
+async function copiarArchivoDrive(fileId, nombre, carpetaId) {
+  return driveRequest("POST", `files/${fileId}/copy`, { name: nombre, parents: [carpetaId] }, { fields: "id" });
+}
+
+// Copia las fotos de un grupo antiguo a la estructura <año>/<nivel>/…
+async function migrarGrupo(g, { anio, nivelKey, reemplazar, avisar }) {
+  const base = [anio, NIVELES[nivelKey].carpeta];
+  const destinos = {
+    siged:  { carpeta: await resolverCarpeta([...base, SIGED_FOLDER_NAME, g.grupo]),  archivos: g.siged,  extraer: VERSIONES_ZIP.siged.extraer },
+    hd:     { carpeta: await resolverCarpeta([...base, HD_FOLDER_NAME, g.grupo]),     archivos: g.hd,     extraer: VERSIONES_ZIP.hd.extraer },
+    cedula: { carpeta: await resolverCarpeta([...base, CEDULA_FOLDER_NAME, g.grupo]), archivos: g.cedula, extraer: VERSIONES_ZIP.cedula.extraer }
+  };
+  let copiados = 0, omitidos = 0, reemplazados = 0;
+  for (const d of Object.values(destinos)) {
+    if (!d.archivos.length) continue;
+    const existentes = agruparPorDoc(await listarImagenes(d.carpeta), d.extraer).mapa;
+    const vistos = new Set();
+    for (const f of d.archivos) { // más reciente primero
+      const doc = sanitizeDoc(d.extraer(f.name) ?? "");
+      if (!doc || vistos.has(doc)) continue;
+      vistos.add(doc);
+      const viejos = existentes.get(doc) ?? [];
+      if (viejos.length && !reemplazar) { omitidos++; continue; }
+      await copiarArchivoDrive(f.id, f.name, d.carpeta);
+      for (const v of viejos) {
+        try { await driveRequest("PATCH", `files/${v}`, { trashed: true }); } catch { /* ignorar */ }
+      }
+      if (viejos.length) reemplazados++; else copiados++;
+      avisar?.(copiados + reemplazados + omitidos);
+    }
+  }
+  return { copiados, omitidos, reemplazados };
+}
+
+async function migrarSeleccionados() {
+  const status = $("mig-status");
+  const btn = $("btn-mig-migrar");
+  const plan = state.migracionPlan?.plan ?? [];
+  const seleccion = [...document.querySelectorAll(".mig-grupo:checked")].map((cb) => plan[Number(cb.value)]).filter(Boolean);
+  const anio = $("mig-anio").value.trim();
+  const nivelKey = $("mig-nivel").value;
+  if (!seleccion.length) { status.textContent = "Marca al menos un grupo."; status.className = "field-status field-status--error"; return; }
+  if (!/^\d{4}$/.test(anio)) { status.textContent = "El año destino debe tener 4 dígitos."; status.className = "field-status field-status--error"; return; }
+  const reemplazar = $("mig-reemplazar").checked;
+  const cfg = configActual();
+  if (!confirm(`¿Copiar ${seleccion.length} grupo${seleccion.length !== 1 ? "s" : ""} de "${state.migracionPlan.origen.name}" a ${cfg.rootFolderName} / ${anio} / ${NIVELES[nivelKey].label}?${reemplazar ? " Las fotos existentes se reemplazarán." : ""}`)) return;
+  btn.disabled = true;
+  status.className = "field-status";
+  const totales = { copiados: 0, omitidos: 0, reemplazados: 0 };
+  let errores = 0;
+  try {
+    for (const g of seleccion) {
+      const idx = plan.indexOf(g);
+      const estado = $(`mig-estado-${idx}`);
+      estado.textContent = "Migrando…";
+      status.textContent = `Migrando ${g.grupo}…`;
+      try {
+        const r = await migrarGrupo(g, { anio, nivelKey, reemplazar, avisar: (n) => { estado.textContent = `${n}…`; } });
+        totales.copiados += r.copiados; totales.omitidos += r.omitidos; totales.reemplazados += r.reemplazados;
+        estado.textContent = `✓ ${r.copiados} copiadas${r.reemplazados ? `, ${r.reemplazados} reemplazadas` : ""}${r.omitidos ? `, ${r.omitidos} ya existían` : ""}`;
+        console.info(`[SIGED] ${state.driveUser?.email ?? "usuario"} migró ${g.grupo} → ${anio}/${NIVELES[nivelKey].label}`, r);
+      } catch (e) {
+        errores++;
+        estado.textContent = `✕ ${e.message}`;
+      }
+    }
+    status.textContent = `✓ Migración terminada: ${totales.copiados} copiadas, ${totales.reemplazados} reemplazadas, ${totales.omitidos} omitidas por ya existir${errores ? `, ${errores} grupo(s) con error` : ""}.`;
+    status.className = errores ? "field-status field-status--warn" : "field-status field-status--ok";
+    toast("Migración terminada.", errores ? "info" : "success");
+    state.inventario = null;
+    state.registro = null;
+    if (anio === cfg.anioLectivo) {
+      cargarGruposZip().catch(() => {});
+      if (state.grupoActual && nivelKey === nivelActual()) sincronizarFotosDeDrive(state.grupoActual).catch(() => {});
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function bindGestion() {
+  document.querySelectorAll(".nav-btn").forEach((b) => { b.onclick = () => mostrarVista(b.dataset.vista); });
+  window.addEventListener("hashchange", () => mostrarVista(location.hash.replace("#", "")));
+
+  $("gz-nivel").onchange = renderGruposZip;
+  $("btn-gz-cargar").onclick = () => cargarGruposZip();
+  $("gz-todos").onchange = () => {
+    document.querySelectorAll(".gz-grupo").forEach((cb) => { cb.checked = $("gz-todos").checked; });
+    actualizarResumenZip();
+  };
+  $("gz-grupos").addEventListener("change", actualizarResumenZip);
+  $("btn-gz-generar").onclick = generarZipGestion;
+
+  $("btn-mig-analizar").onclick = async () => {
+    const status = $("mig-status");
+    const link = $("mig-link").value.trim();
+    if (!link) { status.textContent = "Pega el link de la carpeta antigua."; status.className = "field-status field-status--error"; return; }
+    status.textContent = "Analizando carpeta…";
+    status.className = "field-status";
+    $("btn-mig-analizar").disabled = true;
+    try {
+      state.migracionPlan = await analizarCarpetaAntigua(link);
+      renderPlanMigracion();
+      status.textContent = "Revisa los grupos detectados y pulsa \"Migrar seleccionados\".";
+    } catch (e) {
+      state.migracionPlan = null;
+      renderPlanMigracion();
+      status.textContent = `Error: ${e.message}`;
+      status.className = "field-status field-status--error";
+    } finally {
+      $("btn-mig-analizar").disabled = false;
+    }
+  };
+  $("mig-todos").onchange = () => {
+    document.querySelectorAll(".mig-grupo").forEach((cb) => { cb.checked = $("mig-todos").checked; });
+  };
+  $("btn-mig-migrar").onclick = migrarSeleccionados;
+}
+
 function initHelp() {
   const dlg = $("help-modal");
   document.querySelectorAll(".help-btn").forEach((b) => {
@@ -1434,64 +2598,45 @@ function bindEvents() {
     const file = ev.target.files?.[0];
     if (!file) return;
     const isXlsx = /\.xlsx?$/i.test(file.name);
-    const esSecundaria = $("nivel").value === "secundaria";
+    const concatenarCurso = NIVELES[nivelActual()].concatenarCurso;
+    let rows;
     try {
       if (isXlsx) {
         const buffer = await file.arrayBuffer();
-        state.rows = parseXLSX(buffer, esSecundaria);
+        rows = parseXLSX(buffer, concatenarCurso);
       } else {
         const text = await file.text();
-        state.rows = parseCSV(text, esSecundaria);
+        rows = parseCSV(text, concatenarCurso);
       }
     } catch (err) {
       return toast(err.message, "error", 5000);
     }
-    state.groups = [...new Set(state.rows.map((r) => String(r.Grupo).trim()))].filter(Boolean).sort();
-    $("grupo").innerHTML = state.groups.map((g) => `<option value="${g}">${g}</option>`).join("");
-    if (state.groups.length) {
-      $("grupo").value = state.groups[0];
-      seleccionarGrupo();
-      toast(`Datos cargados: ${state.rows.length} estudiantes en ${state.groups.length} grupos.`, "info");
-    }
+    state.fuenteActual = { descripcion: `Archivo local ${file.name}`, central: false, nivel: nivelActual() };
+    aplicarFilas(rows);
+    actualizarStatusFuente();
+    toast(`Datos cargados: ${rows.length} estudiantes en ${state.groups.length} grupos.`, "info");
   };
 
   $("btn-cargar-url").onclick = () => {
     const url = $("csv-url").value.trim();
     if (!url) return toast("Pega una URL válida primero.", "error");
-    cargarDesdeUrl(url);
+    cargarDesdeFuente(url, { guardar: true });
   };
 
   $("btn-olvidar-url").onclick = () => {
-    const key = obtenerUrlKeyNivel();
-    localStorage.removeItem(key);
+    localStorage.removeItem(claveUrlNivel());
     $("csv-url").value = "";
     actualizarStatusUrl(null);
-    const nivel = $("nivel").value === "secundaria" ? "Secundaria" : "Primaria";
-    toast(`URL de ${nivel} eliminada del navegador.`, "info");
+    toast(`URL manual de ${NIVELES[nivelActual()].label} eliminada del navegador.`, "info");
   };
 
+  $("btn-recargar-base").onclick = () => cargarBaseNivel();
+
   $("nivel").onchange = () => {
-    const nivel = $("nivel").value;
-    localStorage.setItem(STORAGE_NIVEL_KEY, nivel);
-    const key = obtenerUrlKeyNivel();
-    const savedUrl = localStorage.getItem(key);
-    $("csv-url").value = savedUrl || "";
-    actualizarStatusUrl(savedUrl);
-    if (savedUrl) {
-      cargarDesdeUrl(savedUrl, true);
-    } else {
-      state.rows = [];
-      state.groups = [];
-      state.grupoActual = "";
-      state.estudiantes = [];
-      state.seleccion = null;
-      $("grupo").innerHTML = "";
-      $("grupo-actual").textContent = "No seleccionado";
-      $("estudiantes").innerHTML = "";
-      actualizarPendientesYStats();
-      actualizarStudentPreview();
-      $("estudiante-actual").textContent = "Estudiante: Ninguno seleccionado";
-    }
+    localStorage.setItem(STORAGE_NIVEL_KEY, nivelActual());
+    state.grupoCarpetas = null;
+    limpiarDatos();
+    cargarBaseNivel({ silencioso: true });
   };
 
   $("btn-limpiar-sesion").onclick = limpiarSesion;
@@ -1512,6 +2657,12 @@ function bindEvents() {
     loginConGoogle();
   };
 
+  // Administración (vista Gestión)
+  $("btn-admin-guardar").onclick = guardarAdmin;
+  $("btn-admin-registro").onclick = () => cargarRegistroActividad();
+  $("adm-anio").oninput = actualizarEstructuraAdmin;
+  $("adm-root").oninput = actualizarEstructuraAdmin;
+
   $("btn-seleccionar").onclick = seleccionarGrupo;
   $("buscar").oninput = renderEstudiantes;
   $("btn-guardar").onclick = guardarFoto;
@@ -1522,6 +2673,17 @@ function bindEvents() {
 
   // Capturar button (auto-activates camera if needed, then captures)
   $("btn-capturar").onclick = capturarFoto;
+
+  // Subir foto desde archivo
+  $("btn-subir-foto").onclick = () => {
+    if (!state.seleccion) return toast("Selecciona un estudiante primero.", "error");
+    $("foto-archivo").click();
+  };
+  $("foto-archivo").onchange = async (ev) => {
+    const file = ev.target.files?.[0];
+    ev.target.value = "";
+    try { await subirFotoDesdeArchivo(file); } catch (e) { toast(`No se pudo procesar la imagen: ${e.message}`, "error"); }
+  };
 
   // Inline ZIP button under camera
   $("btn-zip-inline").onclick = comprimirGrupo;
@@ -1535,7 +2697,9 @@ function bindEvents() {
 
 (async function init() {
   bindEvents();
+  bindGestion();
   initHelp();
+  mostrarVista(location.hash.replace("#", "") || "fotos");
 
   // Restaurar fotos guardadas en el navegador
   await restaurarSesion();
@@ -1551,18 +2715,19 @@ function bindEvents() {
     localStorage.removeItem(STORAGE_URL_KEY);
   }
 
+  // Configuración central en caché (la versión fresca se lee al conectar Drive)
+  try {
+    const cache = JSON.parse(localStorage.getItem(STORAGE_CONFIG_CACHE) ?? "null");
+    if (cache) { state.config = normalizarConfig(cache); state.configOrigen = "cache"; }
+  } catch { /* caché corrupta — ignorar */ }
+
   // Restaurar nivel guardado
   const savedNivel = localStorage.getItem(STORAGE_NIVEL_KEY);
-  if (savedNivel) $("nivel").value = savedNivel;
+  if (savedNivel && savedNivel in NIVELES) $("nivel").value = savedNivel;
 
-  // Restaurar URL del nivel actual y auto-cargar datos
-  const urlKey = obtenerUrlKeyNivel();
-  const savedUrl = localStorage.getItem(urlKey);
-  if (savedUrl) {
-    $("csv-url").value = savedUrl;
-    actualizarStatusUrl(savedUrl);
-    await cargarDesdeUrl(savedUrl, true);
-  }
+  // Cargar lo que se pueda sin Drive (URL manual pública); las bases en
+  // Drive se cargan al conectar.
+  await cargarBaseNivel({ silencioso: true });
 
   // Pre-inicializar GIS (el script se carga de forma sincrónica antes que este módulo)
   const clientId = obtenerClientId();
