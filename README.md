@@ -16,7 +16,8 @@ Aplicación web 100% cliente para gestionar fotos estudiantiles directamente des
 - Sección **Gestión** (menú superior), separada de la toma de fotos:
   - Descarga en ZIP de las fotos que están en Drive, eligiendo nivel, grupos (checkboxes) y versiones; dentro del ZIP cada archivo se llama solo con la cédula.
   - Migración de carpetas de versiones anteriores: se pega el link de la carpeta vieja y se copian las fotos (SIGED, alta resolución y por cédula) a la estructura del año.
-  - Configuración central y registro de actividad (solo administradores).
+  - Personas con acceso a Gestión (emails institucionales @hca.edu.uy), configuración central y registro de actividad.
+  - Toda la sección es visible solo para administradores; el resto de usuarios ve únicamente Tomar fotos.
 
 ## Estructura de carpetas en Drive
 
@@ -37,7 +38,9 @@ La configuración vive en `siged-config.json`, dentro de la carpeta raíz. Se cr
 
 ## Gestión
 
-El menú superior tiene dos secciones: **Tomar fotos** y **Gestión**. Gestión requiere Drive conectado.
+El menú superior tiene dos secciones: **Tomar fotos** y **Gestión**. La pestaña Gestión solo aparece para administradores con Drive conectado: los administradores principales (lista `ADMIN_EMAILS` en `app.js`) y las personas agregadas desde la propia sección.
+
+- **Personas con acceso a Gestión.** Se agregan cuentas institucionales `@hca.edu.uy` (se rechaza cualquier otro dominio). La lista se guarda en `siged-config.json`, así que aplica en todos los dispositivos. Los administradores principales no se pueden quitar.
 
 - **Descargar fotos en ZIP.** Elige el nivel, pulsa "Cargar grupos", marca los grupos y las versiones (alta resolución, peso reducido, SIGED). El ZIP se arma con lo que hay en Drive para el año lectivo; los archivos se nombran solo con la cédula (`12345678.jpg`), con una carpeta por versión cuando se eligen varias y, opcionalmente, una carpeta por grupo.
 - **Migrar carpetas de versiones anteriores.** Pega el link de la carpeta antigua (`SIGED Fotos` de la versión anterior, con `<grupo>/`, `imagenes de estudiantes alta resolución/<grupo>/` e `imagenes por cédula/<grupo>/`, o directamente una carpeta de grupo). "Analizar" detecta los grupos y cuántas fotos de cada versión hay; "Migrar seleccionados" las copia en Drive a `<año>/<nivel>/…` conservando alta y baja resolución. La carpeta original no se toca. Si un estudiante ya tiene foto en el destino se omite, salvo que marques "Reemplazar".

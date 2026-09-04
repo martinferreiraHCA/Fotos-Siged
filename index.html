@@ -49,7 +49,7 @@
       </div>
       <nav class="app-nav" aria-label="Secciones del sitio">
         <button type="button" class="nav-btn active" data-vista="fotos">&#128247; Tomar fotos</button>
-        <button type="button" class="nav-btn" data-vista="gestion">&#128194; Gesti&oacute;n</button>
+        <button type="button" id="nav-gestion" class="nav-btn" data-vista="gestion" hidden>&#128194; Gesti&oacute;n</button>
         <span id="btn-admin" class="nav-badge" hidden>Administrador</span>
       </nav>
     </header>
@@ -264,7 +264,7 @@
     <main id="vista-gestion" class="layout layout--gestion" hidden>
       <section id="gestion-sin-drive" class="card gestion-card gestion-aviso">
         <h2 class="section-title">Gesti&oacute;n</h2>
-        <p>Conecta Google Drive (bot&oacute;n en el encabezado) para descargar fotos, migrar carpetas anteriores y administrar la configuraci&oacute;n central.</p>
+        <p id="gestion-aviso-texto">Conecta Google Drive (bot&oacute;n en el encabezado) con una cuenta administradora para descargar fotos, migrar carpetas anteriores y administrar la configuraci&oacute;n central.</p>
       </section>
 
       <section id="g-zip" class="card gestion-card">
@@ -338,6 +338,22 @@
           <button type="button" id="btn-mig-migrar" disabled>Migrar seleccionados</button>
           <p id="mig-status" class="field-status"></p>
         </div>
+      </section>
+
+      <section id="g-personas" class="card gestion-card" hidden>
+        <h2 class="section-title">Personas con acceso a Gesti&oacute;n
+          <button class="help-btn" data-help="gestion-personas" aria-label="Ayuda sobre personas con acceso">?</button>
+        </h2>
+        <p class="gestion-hint">Agrega cuentas institucionales <strong>@hca.edu.uy</strong> para que vean esta secci&oacute;n. El resto de usuarios solo ve "Tomar fotos".</p>
+        <div class="field">
+          <label for="persona-email">Email institucional</label>
+          <div class="field-inline">
+            <input id="persona-email" type="email" placeholder="nombre@hca.edu.uy" autocomplete="off" />
+            <button type="button" id="btn-persona-agregar">Agregar</button>
+          </div>
+          <p id="personas-status" class="field-status"></p>
+        </div>
+        <ul id="personas-lista" class="check-list"></ul>
       </section>
 
       <section id="g-config" class="card gestion-card" hidden>
