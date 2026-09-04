@@ -19,8 +19,11 @@ const NIVELES = {
   secundaria: { label: "Secundaria", carpeta: "Secundaria", concatenarCurso: true }
 };
 
-// Cuentas que pueden editar la configuración central (carpetas y bases de datos).
+// Administradores principales (siempre tienen acceso a Gestión y no se pueden
+// quitar desde la app). Otras personas se agregan desde Gestión con su email
+// institucional y quedan guardadas en la configuración central.
 const ADMIN_EMAILS = ["martinferreira@hca.edu.uy"];
+const DOMINIO_INSTITUCIONAL = "hca.edu.uy";
 // Archivo JSON con la configuración central. Vive en la carpeta raíz de Drive
 // del administrador; al compartir esa carpeta, todos los usuarios lo leen.
 const CONFIG_FILE_NAME = "siged-config.json";
@@ -96,6 +99,7 @@ const helpText = {
   "cargar-url":        { title: "URL fija de datos",       body: "Respaldo manual: pega el link de un Google Sheets, un archivo XLSX en Google Drive o un CSV en GitHub Raw. Se guarda por nivel solo en este navegador. Si el administrador configuró una base central, esta tiene prioridad." },
   "gestion-zip":       { title: "Descargar fotos en ZIP", body: "Arma un ZIP con las fotos que están en Drive para el año lectivo actual. Elige el nivel, marca los grupos a incluir y qué versiones quieres (alta resolución, peso reducido o SIGED). Dentro del ZIP cada archivo se llama solo con la cédula del estudiante." },
   "gestion-migrar":    { title: "Migrar carpetas anteriores", body: "Compatibilidad con versiones anteriores: pega el link de la carpeta vieja (la \"SIGED Fotos\" antigua con sus subcarpetas de grupo, alta resolución y por cédula, o directamente una carpeta de grupo). La app detecta los grupos y copia las fotos, conservando alta y baja resolución, a la carpeta del año y nivel que elijas. La carpeta original no se modifica." },
+  "gestion-personas":  { title: "Personas con acceso a Gestión", body: "Solo quienes figuran acá (más los administradores principales) ven la sección Gestión: descargas ZIP, migración, configuración y registro. Se agregan con su email institucional @" + DOMINIO_INSTITUCIONAL + ". La lista se guarda en la configuración central, así que aplica a todos los dispositivos." },
   "admin":             { title: "Administración",          body: "Solo para cuentas administradoras. Define el año lectivo, la carpeta raíz de Drive donde trabajan todos los usuarios y la carpeta o archivo de base de datos de cada nivel. También muestra quién fue el último en modificar las fotos de cada grupo." }
 };
 
@@ -284,9 +288,30 @@ function configPorDefecto() {
       primaria:   { fuente: "" },
       secundaria: { fuente: "" }
     },
+    gestores: [],
     actualizadoPor: "",
     actualizadoEn: ""
   };
+}
+
+function normalizarEmail(email) {
+  return String(email ?? "").trim().toLowerCase();
+}
+
+function esEmailInstitucional(email) {
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+$/.test(email) && email.endsWith(`@${DOMINIO_INSTITUCIONAL}`);
+}
+
+function esAdminPrincipal(email = state.driveUser?.email) {
+  return ADMIN_EMAILS.includes(normalizarEmail(email));
+}
+
+// Recalcula si el usuario conectado tiene acceso a Gestión (administrador
+// principal o persona agregada en la configuración central).
+function calcularEsAdmin() {
+  const email = normalizarEmail(state.driveUser?.email);
+  state.esAdmin = !!email && (ADMIN_EMAILS.includes(email) || (configActual().gestores ?? []).includes(email));
+  return state.esAdmin;
 }
 
 function normalizarConfig(cfg) {
@@ -298,6 +323,8 @@ function normalizarConfig(cfg) {
   Object.keys(NIVELES).forEach((n) => {
     out.niveles[n] = { fuente: String(cfg?.niveles?.[n]?.fuente ?? "").trim() };
   });
+  out.gestores = [...new Set((Array.isArray(cfg?.gestores) ? cfg.gestores : []).map(normalizarEmail).filter(esEmailInstitucional))]
+    .filter((e) => !ADMIN_EMAILS.includes(e));
   return out;
 }
 
@@ -687,7 +714,7 @@ async function obtenerInfoUsuario() {
     headers: { Authorization: `Bearer ${state.driveToken}` }
   });
   state.driveUser = await res.json();
-  state.esAdmin = ADMIN_EMAILS.includes(String(state.driveUser?.email ?? "").toLowerCase());
+  calcularEsAdmin();
 }
 
 async function loginConGoogle() {
@@ -722,6 +749,7 @@ async function cargarTodoDesdeDrive() {
   } catch (e) {
     toast(`No se pudo leer la configuración central: ${e.message}`, "error", 6000);
   }
+  calcularEsAdmin();
   if (state.configOrigen !== "drive") {
     if (state.esAdmin) {
       toast("No hay configuración central todavía. Defínela en la sección Gestión (carpetas y bases de datos).", "info", 7000);
@@ -748,6 +776,7 @@ function logoutGoogle() {
   state.driveUser     = null;
   state.esAdmin       = false;
   state.configFileId  = null;
+  if (state.vista === "gestion") mostrarVista("fotos");
   if (state.configOrigen === "drive") state.configOrigen = "cache";
   state.carpetas.clear();
   state.grupoCarpetas = null;
@@ -768,6 +797,7 @@ function actualizarUIUsuario() {
   $("btn-login-google").hidden = loggedIn;
   $("user-info").hidden = !loggedIn;
   $("btn-admin").hidden = !(loggedIn && state.esAdmin);
+  $("nav-gestion").hidden = !(loggedIn && state.esAdmin);
   if (loggedIn && state.driveUser) {
     $("user-name").textContent = state.driveUser.name ?? state.driveUser.email ?? "Usuario";
     const avatar = $("user-avatar");
@@ -2238,23 +2268,97 @@ function mostrarVista(vista) {
 
 function prepararGestion() {
   const conectado = !!state.driveToken;
+  const admin = conectado && state.esAdmin;
   const cfg = configActual();
-  $("gestion-sin-drive").hidden = conectado;
-  $("g-zip").hidden = !conectado;
-  $("g-migrar").hidden = !conectado;
-  $("g-config").hidden = !(conectado && state.esAdmin);
-  $("g-registro").hidden = !(conectado && state.esAdmin);
+  const aviso = $("gestion-sin-drive");
+  aviso.hidden = admin;
+  $("gestion-aviso-texto").textContent = conectado
+    ? `Esta sección es solo para administradores. Tu cuenta (${state.driveUser?.email ?? "sin email"}) no tiene acceso a Gestión; pide a un administrador que la agregue.`
+    : "Conecta Google Drive (botón en el encabezado) con una cuenta administradora para descargar fotos, migrar carpetas anteriores y administrar la configuración central.";
+  ["g-zip", "g-migrar", "g-personas", "g-config", "g-registro"].forEach((id) => { $(id).hidden = !admin; });
   $("gz-anio").textContent = cfg.anioLectivo;
   if (!$("mig-anio").value) $("mig-anio").value = cfg.anioLectivo;
   if ($("gz-nivel").value !== nivelActual() && !state.inventario) $("gz-nivel").value = nivelActual();
   if ($("mig-nivel").value !== nivelActual() && !state.migracionPlan) $("mig-nivel").value = nivelActual();
-  if (!conectado) return;
-  if (state.esAdmin) {
-    prepararConfigAdmin();
-    if (!state.registro) cargarRegistroActividad(false).catch(() => {});
-  }
+  if (!admin) return;
+  prepararConfigAdmin();
+  renderPersonas();
+  if (!state.registro) cargarRegistroActividad(false).catch(() => {});
   if (!state.inventario) cargarGruposZip().catch(() => {});
   else renderGruposZip();
+}
+
+/* ── Gestión: personas con acceso ────────────────── */
+function renderPersonas() {
+  const ul = $("personas-lista");
+  const cfg = configActual();
+  const principales = ADMIN_EMAILS.map((e) => `
+    <li>
+      <span class="check-nombre">${escapeHtml(e)}</span>
+      <span class="check-detalle">Administrador principal</span>
+    </li>`);
+  const agregados = cfg.gestores.map((e) => `
+    <li>
+      <span class="check-nombre">${escapeHtml(e)}</span>
+      <span class="check-detalle">Acceso a Gestión</span>
+      <button type="button" class="btn-secondary btn-sm btn-persona-quitar" data-email="${escapeHtml(e)}">Quitar</button>
+    </li>`);
+  ul.innerHTML = [...principales, ...agregados].join("");
+  const status = $("personas-status");
+  if (state.configOrigen !== "drive") {
+    status.textContent = "Al agregar la primera persona se creará la configuración central en Drive.";
+    status.className = "field-status";
+  }
+}
+
+async function guardarPersonas(gestores, mensajeOk) {
+  const status = $("personas-status");
+  const btn = $("btn-persona-agregar");
+  btn.disabled = true;
+  status.textContent = "Guardando en la configuración central…";
+  status.className = "field-status";
+  try {
+    await guardarConfiguracionCentral({ ...configActual(), gestores });
+    renderPersonas();
+    actualizarMetaAdmin();
+    status.textContent = `✓ ${mensajeOk}`;
+    status.className = "field-status field-status--ok";
+    console.info(`[SIGED] ${state.driveUser?.email ?? "usuario"} actualizó personas con acceso a Gestión`, gestores);
+  } catch (e) {
+    status.textContent = `Error: ${e.message}`;
+    status.className = "field-status field-status--error";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function agregarPersona() {
+  const input = $("persona-email");
+  const status = $("personas-status");
+  const email = normalizarEmail(input.value);
+  if (!email) { status.textContent = "Escribe un email."; status.className = "field-status field-status--error"; return; }
+  if (!esEmailInstitucional(email)) {
+    status.textContent = `Solo se pueden agregar cuentas institucionales @${DOMINIO_INSTITUCIONAL}.`;
+    status.className = "field-status field-status--error";
+    return;
+  }
+  if (ADMIN_EMAILS.includes(email)) { status.textContent = `${email} ya es administrador principal.`; status.className = "field-status"; return; }
+  const cfg = configActual();
+  if (cfg.gestores.includes(email)) { status.textContent = `${email} ya tiene acceso.`; status.className = "field-status"; return; }
+  await guardarPersonas([...cfg.gestores, email], `${email} ahora tiene acceso a Gestión.`);
+  input.value = "";
+}
+
+async function quitarPersona(email) {
+  email = normalizarEmail(email);
+  if (!confirm(`¿Quitar el acceso a Gestión de ${email}?`)) return;
+  const cfg = configActual();
+  await guardarPersonas(cfg.gestores.filter((e) => e !== email), `${email} ya no tiene acceso a Gestión.`);
+  if (email === normalizarEmail(state.driveUser?.email)) {
+    calcularEsAdmin();
+    actualizarUIUsuario();
+    mostrarVista("fotos");
+  }
 }
 
 /* ── Gestión: ZIP por grupos desde Drive ─────────── */
@@ -2577,6 +2681,13 @@ function bindGestion() {
     document.querySelectorAll(".mig-grupo").forEach((cb) => { cb.checked = $("mig-todos").checked; });
   };
   $("btn-mig-migrar").onclick = migrarSeleccionados;
+
+  $("btn-persona-agregar").onclick = agregarPersona;
+  $("persona-email").onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); agregarPersona(); } };
+  $("personas-lista").addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".btn-persona-quitar");
+    if (btn) quitarPersona(btn.dataset.email);
+  });
 }
 
 function initHelp() {

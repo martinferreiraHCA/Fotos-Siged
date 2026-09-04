@@ -1604,3 +1604,9 @@ body.en-gestion .mobile-toolbar { display: none !important; }
   .check-list li { flex-direction: column; align-items: flex-start; }
   .check-list label { flex-wrap: wrap; }
 }
+
+/* ── Personas con acceso ─────────────────────────── */
+#personas-lista li { gap: .75rem; }
+#personas-lista .check-nombre { flex: 0 1 auto; }
+#personas-lista .check-detalle { flex: 1 1 auto; }
+#personas-lista .btn-persona-quitar { color: var(--danger); border-color: rgba(192,57,43,.25); width: auto; }
