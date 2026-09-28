@@ -13,6 +13,7 @@ Aplicación web 100% cliente para gestionar fotos estudiantiles directamente des
 - Sube las tres versiones a Drive de forma automática. Si el estudiante ya tenía foto, **se reemplaza el mismo archivo** y las copias viejas van a la papelera: nunca quedan duplicados.
 - Al conectar Drive, cada usuario carga automáticamente la configuración central, la base de datos del nivel y las fotos que ya tomó cualquier otro usuario del grupo.
 - Exporta ZIP del grupo (con las tres carpetas), PDF de asistencia, PDF de estado y PDF de todos los grupos.
+- Sección **Editar fotos** (menú superior, disponible para todos sin Drive ni base de datos): recorta una o varias imágenes sueltas con el formato y crop del sitio y las descarga en las tres versiones. Ver [Editar fotos sueltas](#editar-fotos-sueltas).
 - Sección **Gestión** (menú superior), separada de la toma de fotos:
   - Descarga en ZIP de las fotos que están en Drive, eligiendo nivel, grupos (checkboxes) y versiones; dentro del ZIP cada archivo se llama solo con la cédula.
   - Migración de carpetas de versiones anteriores: se pega el link de la carpeta vieja y se copian las fotos (SIGED, alta resolución y por cédula) a la estructura del año.
@@ -36,9 +37,22 @@ SIGED Fotos/                      ← carpeta raíz (configurable por el adminis
 
 La configuración vive en `siged-config.json`, dentro de la carpeta raíz. Se crea desde el panel de administración y todos los usuarios con acceso a la carpeta la leen al conectar Drive.
 
+## Editar fotos sueltas
+
+La pestaña **Editar fotos** sirve para preparar fotos individuales sin cargar la base de estudiantes, sin seleccionar grupo y sin conectar Drive. Es útil para fotos que llegan por otros medios (WhatsApp, correo, escáner) o para rehacer el encuadre de una foto puntual.
+
+1. Arrastra una o varias imágenes al recuadro (o haz clic para elegirlas).
+2. Para cada foto ajusta el **encuadre cuadrado**: arrastra para mover, usa el zoom (deslizador, rueda del mouse o pinza en pantallas táctiles) y rota de a 90° si hace falta. Las guías de tercios y la vista previa de 100×100 muestran exactamente lo que se guardará.
+3. Opcionalmente escribe el **documento** y el **nombre**: así los archivos se nombran igual que los que genera la app (`12345678.png`, `Nombre_Apellido_12345678.jpg`, `12345678.jpg`). Si el archivo original ya se llama `12345678.jpg` o `Nombre_Apellido_12345678.jpg`, los datos se completan solos. Sin documento se usa el nombre del archivo original.
+4. Marca las versiones a generar (SIGED 100×100 PNG, alta resolución 1080×1080 JPG, peso reducido 600×600 JPG) y descarga:
+   - **Descargar esta foto**: un archivo si hay una sola versión marcada, o un ZIP con una carpeta por versión.
+   - **Descargar todas (ZIP)**: todas las fotos cargadas, con la misma estructura de carpetas que el ZIP de grupo (`SIGED/`, `imagenes de estudiantes alta resolución/`, `imagenes por cédula/`).
+
+Nada se sube a Drive ni a internet: las fotos se procesan y se descargan en el propio dispositivo.
+
 ## Gestión
 
-El menú superior tiene dos secciones: **Tomar fotos** y **Gestión**. La pestaña Gestión solo aparece para administradores con Drive conectado: los administradores principales (lista `ADMIN_EMAILS` en `app.js`) y las personas agregadas desde la propia sección.
+El menú superior tiene tres secciones: **Tomar fotos**, **Editar fotos** y **Gestión**. La pestaña Gestión solo aparece para administradores con Drive conectado: los administradores principales (lista `ADMIN_EMAILS` en `app.js`) y las personas agregadas desde la propia sección.
 
 - **Personas con acceso a Gestión.** Se agregan cuentas institucionales `@hca.edu.uy` (se rechaza cualquier otro dominio). La lista se guarda en `siged-config.json`, así que aplica en todos los dispositivos. Los administradores principales no se pueden quitar.
 
