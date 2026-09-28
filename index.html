@@ -49,6 +49,7 @@
       </div>
       <nav class="app-nav" aria-label="Secciones del sitio">
         <button type="button" class="nav-btn active" data-vista="fotos">&#128247; Tomar fotos</button>
+        <button type="button" class="nav-btn" data-vista="editor">&#9986;&#65039; Editar fotos</button>
         <button type="button" id="nav-gestion" class="nav-btn" data-vista="gestion" hidden>&#128194; Gesti&oacute;n</button>
         <span id="btn-admin" class="nav-badge" hidden>Administrador</span>
       </nav>
@@ -258,6 +259,88 @@
             <button class="help-btn" data-help="comprimir" aria-label="Ayuda para comprimir grupo">?</button>
           </div>
         </footer>
+      </section>
+    </main>
+
+    <main id="vista-editor" class="layout layout--gestion" hidden>
+      <section class="card gestion-card">
+        <h2 class="section-title">Editar fotos sueltas
+          <button class="help-btn" data-help="editor" aria-label="Ayuda sobre el editor de fotos">?</button>
+        </h2>
+        <p class="gestion-hint">Recorta y genera fotos con el formato del sitio <strong>sin cargar la base de estudiantes</strong> ni conectar Drive. Elige una o varias im&aacute;genes, ajusta el encuadre cuadrado de cada una y descarga las versiones: SIGED (100&times;100), alta resoluci&oacute;n (1080&times;1080) y peso reducido (600&times;600). Todo se procesa en este navegador.</p>
+
+        <div id="ed-dropzone" class="ed-dropzone" tabindex="0" role="button" aria-label="Elegir im&aacute;genes">
+          <input id="ed-archivos" type="file" accept="image/*" multiple hidden />
+          <span class="ed-drop-icon" aria-hidden="true">&#128444;&#65039;</span>
+          <strong>Arrastra fotos aqu&iacute; o haz clic para elegirlas</strong>
+          <span>Puedes seleccionar varias a la vez (JPG, PNG, HEIC seg&uacute;n el navegador).</span>
+        </div>
+
+        <div class="gestion-row ed-opciones">
+          <div class="field">
+            <label>Versiones a generar</label>
+            <div class="check-row">
+              <label><input type="checkbox" id="ed-v-siged" checked /> SIGED (100&times;100 PNG)</label>
+              <label><input type="checkbox" id="ed-v-hd" checked /> Alta resoluci&oacute;n (1080&times;1080 JPG)</label>
+              <label><input type="checkbox" id="ed-v-cedula" checked /> Peso reducido (600&times;600 JPG)</label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="ed-trabajo" class="card gestion-card" hidden>
+        <div class="ed-layout">
+          <div class="ed-editor">
+            <h3 class="ed-subtitle">Encuadre <span id="ed-titulo-foto" class="ed-titulo-foto"></span></h3>
+            <div class="ed-canvas-wrap">
+              <canvas id="ed-canvas" width="600" height="600" aria-label="Encuadre de la foto"></canvas>
+            </div>
+            <p class="camera-hint">Arrastra para mover la foto; usa el zoom, la rueda del mouse o la pinza para acercar. El cuadro muestra exactamente lo que se guardar&aacute;.</p>
+            <div class="ed-controls">
+              <label class="ed-zoom" for="ed-zoom">Zoom <input id="ed-zoom" type="range" min="1" max="4" step="0.01" value="1" /></label>
+              <div class="ed-btns">
+                <button type="button" id="ed-rotar-izq" class="btn-secondary btn-sm" title="Rotar 90&deg; a la izquierda">&#10226; Rotar</button>
+                <button type="button" id="ed-rotar-der" class="btn-secondary btn-sm" title="Rotar 90&deg; a la derecha">&#10227; Rotar</button>
+                <button type="button" id="ed-reset" class="btn-secondary btn-sm" title="Volver al encuadre centrado">Centrar</button>
+              </div>
+            </div>
+            <div class="ed-datos">
+              <div class="field">
+                <label for="ed-doc">Documento (c&eacute;dula)
+                  <span class="field-badge">opcional &middot; nombra los archivos</span>
+                </label>
+                <input id="ed-doc" type="text" inputmode="numeric" placeholder="12345678" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="ed-nombre">Nombre y apellido
+                  <span class="field-badge">opcional &middot; alta resoluci&oacute;n</span>
+                </label>
+                <input id="ed-nombre" type="text" placeholder="Nombre Apellido" autocomplete="off" />
+              </div>
+            </div>
+            <div class="ed-preview-row">
+              <div class="ed-preview">
+                <canvas id="ed-preview-siged" width="100" height="100" aria-label="Vista previa SIGED"></canvas>
+                <span>SIGED 100&times;100</span>
+              </div>
+              <p id="ed-nombres-archivo" class="field-status"></p>
+            </div>
+            <div class="config-actions">
+              <button type="button" id="ed-descargar-una">&#11015; Descargar esta foto</button>
+              <button type="button" id="ed-quitar" class="btn-secondary">Quitar del editor</button>
+            </div>
+          </div>
+
+          <div class="ed-lista-wrap">
+            <h3 class="ed-subtitle">Fotos cargadas <span id="ed-contador" class="ed-contador"></span></h3>
+            <ul id="ed-lista" class="ed-lista"></ul>
+            <div class="config-actions">
+              <button type="button" id="ed-descargar-todas" class="btn-success">&#11015; Descargar todas (ZIP)</button>
+              <button type="button" id="ed-quitar-todas" class="btn-secondary">Quitar todas</button>
+            </div>
+            <p id="ed-status" class="field-status"></p>
+          </div>
+        </div>
       </section>
     </main>
 

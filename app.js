@@ -82,7 +82,9 @@ const state = {
   registro: null,              // último registro de actividad cargado (admin)
   inventario: null,            // carpetas de grupo y fotos del año (Gestión)
   migracionPlan: null,         // grupos detectados en una carpeta antigua
-  vista: "fotos"
+  vista: "fotos",
+  // Editor de fotos sueltas (sin base de estudiantes ni Drive)
+  editor: { items: [], seleccion: null }
 };
 
 const helpText = {
@@ -99,6 +101,7 @@ const helpText = {
   "cargar-url":        { title: "URL fija de datos",       body: "Respaldo manual: pega el link de un Google Sheets, un archivo XLSX en Google Drive o un CSV en GitHub Raw. Se guarda por nivel solo en este navegador. Si el administrador configuró una base central, esta tiene prioridad." },
   "gestion-zip":       { title: "Descargar fotos en ZIP", body: "Arma un ZIP con las fotos que están en Drive para el año lectivo actual. Elige el nivel, marca los grupos a incluir y qué versiones quieres (alta resolución, peso reducido o SIGED). Dentro del ZIP cada archivo se llama solo con la cédula del estudiante." },
   "gestion-migrar":    { title: "Migrar carpetas anteriores", body: "Compatibilidad con versiones anteriores: pega el link de la carpeta vieja (la \"SIGED Fotos\" antigua con sus subcarpetas de grupo, alta resolución y por cédula, o directamente una carpeta de grupo). La app detecta los grupos y copia las fotos, conservando alta y baja resolución, a la carpeta del año y nivel que elijas. La carpeta original no se modifica." },
+  "editor":            { title: "Editar fotos sueltas",     body: "Recorta una o varias imágenes con el formato del sitio sin cargar la base de estudiantes ni conectar Drive. Arrastra la foto para encuadrarla, ajusta el zoom y rótala si hace falta; si escribes la cédula (y el nombre) los archivos se llaman igual que los que genera la app. Descarga cada foto por separado o todas juntas en un ZIP con las carpetas SIGED, alta resolución y por cédula. Nada se sube a internet." },
   "gestion-personas":  { title: "Personas con acceso a Gestión", body: "Solo quienes figuran acá (más los administradores principales) ven la sección Gestión: descargas ZIP, migración, configuración y registro. Se agregan con su email institucional @" + DOMINIO_INSTITUCIONAL + ". La lista se guarda en la configuración central, así que aplica a todos los dispositivos." },
   "admin":             { title: "Administración",          body: "Solo para cuentas administradoras. Define el año lectivo, la carpeta raíz de Drive donde trabajan todos los usuarios y la carpeta o archivo de base de datos de cada nivel. También muestra quién fue el último en modificar las fotos de cada grupo." }
 };
@@ -1671,21 +1674,31 @@ async function subirFotoDesdeArchivo(file) {
   if (!/^image\//.test(file.type)) return toast("El archivo debe ser una imagen.", "error");
   let fuente;
   try {
-    // imageOrientation aplica la rotación EXIF de las fotos de celular
-    fuente = await createImageBitmap(file, { imageOrientation: "from-image" });
-  } catch {
-    fuente = await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("No se pudo leer la imagen."));
-      img.src = URL.createObjectURL(file);
-    }).catch((e) => { toast(e.message, "error"); return null; });
-    if (!fuente) return;
+    fuente = await cargarImagenArchivo(file);
+  } catch (e) {
+    return toast(e.message, "error");
   }
   const w = fuente.width ?? fuente.naturalWidth;
   const h = fuente.height ?? fuente.naturalHeight;
   procesarYGuardarFoto(fuente, w, h, "archivo");
   fuente.close?.();
+}
+
+// Decodifica un archivo de imagen. imageOrientation aplica la rotación EXIF
+// de las fotos de celular; si el navegador no soporta createImageBitmap se
+// usa un <img> común.
+async function cargarImagenArchivo(file) {
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("No se pudo leer la imagen.")); };
+      img.src = url;
+    });
+  }
 }
 
 // Recorta al centro, genera las tres versiones, las guarda en el dispositivo
@@ -2252,14 +2265,16 @@ function renderRegistroActividad() {
     </li>`).join("") || `<li class="admin-empty">Sin actividad registrada.</li>`;
 }
 
-/* ── Vistas (Tomar fotos / Gestión) ──────────────── */
+/* ── Vistas (Tomar fotos / Editar fotos / Gestión) ── */
+const VISTAS = ["fotos", "editor", "gestion"];
+
 function mostrarVista(vista) {
-  if (!["fotos", "gestion"].includes(vista)) vista = "fotos";
+  if (!VISTAS.includes(vista)) vista = "fotos";
   state.vista = vista;
   const esGestion = vista === "gestion";
-  $("vista-fotos").hidden = esGestion;
-  $("vista-gestion").hidden = !esGestion;
+  VISTAS.forEach((v) => { $(`vista-${v}`).hidden = v !== vista; });
   document.body.classList.toggle("en-gestion", esGestion);
+  document.body.classList.toggle("en-editor", vista === "editor");
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.vista === vista));
   if (location.hash !== `#${vista}`) history.replaceState(null, "", `#${vista}`);
   if (esGestion) prepararGestion();
@@ -2644,6 +2659,475 @@ async function migrarSeleccionados() {
   }
 }
 
+/* ── Editor de fotos sueltas ─────────────────────── */
+// Recorta y genera las tres versiones del sitio a partir de imágenes
+// cualesquiera, sin base de estudiantes ni Drive. Todo queda en el navegador.
+// El encuadre se define sobre un lienzo cuadrado de ED_VIEW px: zoom (1 =
+// la imagen cubre justo el cuadro) y desplazamiento (ox, oy) en esas
+// unidades; al exportar se reescala la misma transformación al tamaño final
+// dibujando siempre desde la imagen original.
+const ED_VIEW = 600;
+const ED_ZOOM_MAX = 4;
+const ED_VERSIONES = {
+  siged:  { carpeta: SIGED_FOLDER_NAME,  tam: PHOTO_WIDTH, mime: "image/png",  calidad: undefined,   label: "SIGED" },
+  hd:     { carpeta: HD_FOLDER_NAME,     tam: HD_WIDTH,    mime: "image/jpeg", calidad: 0.92,        label: "alta resolución" },
+  cedula: { carpeta: CEDULA_FOLDER_NAME, tam: MID_WIDTH,   mime: "image/jpeg", calidad: MID_QUALITY, label: "peso reducido" }
+};
+let edIdSeq = 0;
+let edGesto = null;
+const edPunteros = new Map();
+
+function edItemActual() {
+  return state.editor.items.find((i) => i.id === state.editor.seleccion) ?? null;
+}
+
+function edVersiones() {
+  return Object.keys(ED_VERSIONES).filter((v) => $(`ed-v-${v}`).checked);
+}
+
+function edStatus(texto, tipo = "") {
+  const el = $("ed-status");
+  el.textContent = texto;
+  el.className = `field-status${tipo ? ` field-status--${tipo}` : ""}`;
+}
+
+// Nombre de archivo seguro a partir del nombre original (sin extensión).
+function edBaseSegura(texto) {
+  const base = String(texto ?? "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return base || "foto";
+}
+
+// Intenta deducir cédula y nombre del nombre del archivo: "12345678.jpg" o
+// "Nombre_Apellido_12345678.jpg" (el formato que genera la propia app).
+function edDeducirDatos(base) {
+  const soloDoc = base.match(/^(\d{6,10})$/);
+  if (soloDoc) return { doc: soloDoc[1], nombre: "" };
+  const nombreDoc = base.match(/^([A-Za-z]+(?:[_ ][A-Za-z]+)*)[_ ](\d{6,10})$/);
+  if (nombreDoc) return { doc: nombreDoc[2], nombre: nombreDoc[1].replace(/_/g, " ").trim() };
+  return { doc: "", nombre: "" };
+}
+
+function edNombresSalida(item) {
+  const doc = sanitizeDoc(item.doc);
+  const base = doc || edBaseSegura(item.base);
+  const nombre = String(item.nombre ?? "").trim();
+  const hd = doc && nombre ? generarNombreHD(nombre, doc) : base;
+  return { base, siged: `${base}.png`, hd: `${hd}.jpg`, cedula: `${base}.jpg` };
+}
+
+function edEtiqueta(item) {
+  const doc = sanitizeDoc(item.doc);
+  const nombre = String(item.nombre ?? "").trim();
+  if (doc) return nombre ? `${nombre} · ${doc}` : doc;
+  return nombre || item.base;
+}
+
+function edGeometria(item, V) {
+  const rotado = item.rot % 180 !== 0;
+  const rw = rotado ? item.h : item.w;
+  const rh = rotado ? item.w : item.h;
+  const escala = Math.max(V / rw, V / rh) * item.zoom;
+  return { escala, dw: rw * escala, dh: rh * escala };
+}
+
+// Mantiene la imagen cubriendo todo el cuadro (sin bordes vacíos).
+function edClamp(item) {
+  const { dw, dh } = edGeometria(item, ED_VIEW);
+  const maxX = Math.max(0, (dw - ED_VIEW) / 2);
+  const maxY = Math.max(0, (dh - ED_VIEW) / 2);
+  item.ox = Math.min(maxX, Math.max(-maxX, item.ox));
+  item.oy = Math.min(maxY, Math.max(-maxY, item.oy));
+}
+
+// Dibuja el encuadre del item en un lienzo cuadrado de N px.
+function edDibujar(item, ctx, N) {
+  const k = N / ED_VIEW;
+  const s = edGeometria(item, ED_VIEW).escala * k;
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.translate(N / 2 + item.ox * k, N / 2 + item.oy * k);
+  ctx.rotate(item.rot * Math.PI / 180);
+  ctx.drawImage(item.img, -item.w * s / 2, -item.h * s / 2, item.w * s, item.h * s);
+  ctx.restore();
+}
+
+// Cambia el zoom dejando fijo el punto (px, py) relativo al centro del cuadro.
+function edSetZoom(item, zoom, px = 0, py = 0) {
+  zoom = Math.min(ED_ZOOM_MAX, Math.max(1, zoom));
+  const r = zoom / item.zoom;
+  item.ox = px - (px - item.ox) * r;
+  item.oy = py - (py - item.oy) * r;
+  item.zoom = zoom;
+  edClamp(item);
+}
+
+function edRotar(item, grados) {
+  item.rot = ((item.rot + grados) % 360 + 360) % 360;
+  // El desplazamiento gira con la imagen para que el encuadre la acompañe
+  const { ox, oy } = item;
+  if (grados > 0) { item.ox = -oy; item.oy = ox; } else { item.ox = oy; item.oy = -ox; }
+  edClamp(item);
+  edRender();
+}
+
+function edRender() {
+  const item = edItemActual();
+  const ctx = $("ed-canvas").getContext("2d");
+  ctx.fillStyle = "#1a2332";
+  ctx.fillRect(0, 0, ED_VIEW, ED_VIEW);
+  if (!item) return;
+  edDibujar(item, ctx, ED_VIEW);
+  // Guías de tercios
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.28)";
+  ctx.lineWidth = 1;
+  [1, 2].forEach((i) => {
+    const p = Math.round(ED_VIEW * i / 3) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(p, 0); ctx.lineTo(p, ED_VIEW);
+    ctx.moveTo(0, p); ctx.lineTo(ED_VIEW, p);
+    ctx.stroke();
+  });
+  ctx.restore();
+
+  const pv = $("ed-preview-siged").getContext("2d");
+  pv.fillStyle = "#fff";
+  pv.fillRect(0, 0, PHOTO_WIDTH, PHOTO_HEIGHT);
+  edDibujar(item, pv, PHOTO_WIDTH);
+
+  if (item.thumbCanvas) {
+    const t = item.thumbCanvas.getContext("2d");
+    t.fillStyle = "#fff";
+    t.fillRect(0, 0, item.thumbCanvas.width, item.thumbCanvas.height);
+    edDibujar(item, t, item.thumbCanvas.width);
+  }
+  $("ed-zoom").value = String(item.zoom);
+}
+
+function edActualizarNombres() {
+  const item = edItemActual();
+  const el = $("ed-nombres-archivo");
+  if (!item) { el.textContent = ""; return; }
+  const versiones = edVersiones();
+  const nombres = edNombresSalida(item);
+  el.textContent = versiones.length
+    ? `Se generará: ${versiones.map((v) => `${nombres[v]} (${ED_VERSIONES[v].label})`).join(" · ")}`
+    : "Marca al menos una versión para generar.";
+}
+
+function edActualizarItemLista(item) {
+  const el = document.querySelector(`#ed-lista li[data-id="${item.id}"] .ed-item-nombre`);
+  if (el) el.textContent = edEtiqueta(item);
+}
+
+function edMostrarSeleccion() {
+  const item = edItemActual();
+  const total = state.editor.items.length;
+  $("ed-trabajo").hidden = total === 0;
+  $("ed-contador").textContent = total ? `(${total})` : "";
+  document.querySelectorAll("#ed-lista li").forEach((li) => {
+    li.classList.toggle("selected", Number(li.dataset.id) === state.editor.seleccion);
+  });
+  if (!item) return;
+  $("ed-titulo-foto").textContent = `· ${item.archivo} (${item.w}×${item.h})`;
+  $("ed-doc").value = item.doc;
+  $("ed-nombre").value = item.nombre;
+  edActualizarNombres();
+  edRender();
+}
+
+function edRenderLista() {
+  const ul = $("ed-lista");
+  ul.innerHTML = "";
+  for (const item of state.editor.items) {
+    const li = document.createElement("li");
+    li.dataset.id = String(item.id);
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    c.className = "ed-thumb";
+    item.thumbCanvas = c;
+    const tctx = c.getContext("2d");
+    tctx.fillStyle = "#fff";
+    tctx.fillRect(0, 0, 64, 64);
+    edDibujar(item, tctx, 64);
+    const info = document.createElement("div");
+    info.className = "ed-item-info";
+    info.innerHTML = `<span class="ed-item-nombre">${escapeHtml(edEtiqueta(item))}</span><span class="ed-item-detalle">${escapeHtml(item.archivo)} · ${item.w}×${item.h}</span>`;
+    const quitar = document.createElement("button");
+    quitar.type = "button";
+    quitar.className = "btn-secondary ed-item-quitar";
+    quitar.textContent = "✕";
+    quitar.title = "Quitar del editor";
+    quitar.onclick = (ev) => { ev.stopPropagation(); edQuitar(item.id); };
+    li.append(c, info, quitar);
+    li.onclick = () => { state.editor.seleccion = item.id; edMostrarSeleccion(); };
+    ul.appendChild(li);
+  }
+  edMostrarSeleccion();
+}
+
+async function edAgregarArchivos(files) {
+  const lista = [...files].filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif)$/i.test(f.name));
+  if (!lista.length) return toast("Elige archivos de imagen.", "error");
+  edStatus(`Leyendo ${lista.length} imagen${lista.length !== 1 ? "es" : ""}…`);
+  let primeraNueva = null;
+  let errores = 0;
+  for (const f of lista) {
+    try {
+      const img = await cargarImagenArchivo(f);
+      const w = img.width ?? img.naturalWidth;
+      const h = img.height ?? img.naturalHeight;
+      if (!w || !h) throw new Error("imagen vacía");
+      const base = f.name.replace(/\.[^.]+$/, "");
+      const item = { id: ++edIdSeq, archivo: f.name, base, img, w, h, rot: 0, zoom: 1, ox: 0, oy: 0, ...edDeducirDatos(base), thumbCanvas: null };
+      state.editor.items.push(item);
+      primeraNueva ??= item.id;
+    } catch (e) {
+      errores++;
+      console.warn("[SIGED] Editor: no se pudo leer", f.name, e);
+    }
+  }
+  if (primeraNueva != null) state.editor.seleccion = primeraNueva;
+  edRenderLista();
+  const ok = lista.length - errores;
+  edStatus(ok ? `${ok} foto${ok !== 1 ? "s" : ""} cargada${ok !== 1 ? "s" : ""}${errores ? ` · ${errores} no se pudieron leer` : ""}.` : "No se pudo leer ninguna imagen.", errores ? (ok ? "warn" : "error") : "ok");
+  if (ok && errores === 0) toast(`${ok} foto${ok !== 1 ? "s" : ""} lista${ok !== 1 ? "s" : ""} para editar.`, "success");
+}
+
+function edQuitar(id) {
+  const idx = state.editor.items.findIndex((i) => i.id === id);
+  if (idx < 0) return;
+  const [item] = state.editor.items.splice(idx, 1);
+  item.img.close?.();
+  if (state.editor.seleccion === id) {
+    state.editor.seleccion = state.editor.items[Math.min(idx, state.editor.items.length - 1)]?.id ?? null;
+  }
+  edRenderLista();
+}
+
+function edQuitarTodas() {
+  const n = state.editor.items.length;
+  if (!n) return;
+  if (!confirm(`¿Quitar las ${n} foto${n !== 1 ? "s" : ""} del editor? No se borra nada de tu dispositivo.`)) return;
+  state.editor.items.forEach((i) => i.img.close?.());
+  state.editor.items = [];
+  state.editor.seleccion = null;
+  edRenderLista();
+  edStatus("");
+}
+
+function canvasABlob(canvas, mime, calidad) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo generar la imagen."))), mime, calidad);
+  });
+}
+
+async function edGenerarVersion(item, clave) {
+  const def = ED_VERSIONES[clave];
+  const c = document.createElement("canvas");
+  c.width = c.height = def.tam;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, def.tam, def.tam);
+  edDibujar(item, ctx, def.tam);
+  return canvasABlob(c, def.mime, def.calidad);
+}
+
+// Evita que dos fotos con la misma cédula/nombre se pisen dentro del ZIP.
+function edRutaUnica(usados, ruta) {
+  if (!usados.has(ruta)) { usados.add(ruta); return ruta; }
+  const m = ruta.match(/^(.*?)(\.[^./]+)$/);
+  const base = m ? m[1] : ruta;
+  const ext = m ? m[2] : "";
+  for (let i = 2; ; i++) {
+    const r = `${base}_${i}${ext}`;
+    if (!usados.has(r)) { usados.add(r); return r; }
+  }
+}
+
+async function edDescargarUna() {
+  const item = edItemActual();
+  if (!item) return;
+  const versiones = edVersiones();
+  if (!versiones.length) return edStatus("Marca al menos una versión.", "error");
+  const btn = $("ed-descargar-una");
+  btn.disabled = true;
+  try {
+    const nombres = edNombresSalida(item);
+    if (versiones.length === 1) {
+      const v = versiones[0];
+      downloadBlob(nombres[v], await edGenerarVersion(item, v));
+      edStatus(`✓ ${nombres[v]} descargada.`, "ok");
+    } else {
+      const zip = new JSZip();
+      for (const v of versiones) zip.file(`${ED_VERSIONES[v].carpeta}/${nombres[v]}`, await edGenerarVersion(item, v));
+      const nombreZip = `${nombres.base}_fotos.zip`;
+      downloadBlob(nombreZip, await zip.generateAsync({ type: "blob" }));
+      edStatus(`✓ ${nombreZip} · ${versiones.length} versiones.`, "ok");
+    }
+    toast(`Foto generada: ${edEtiqueta(item)}`, "success");
+  } catch (e) {
+    edStatus(`Error: ${e.message}`, "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function edDescargarTodas() {
+  const items = state.editor.items;
+  if (!items.length) return;
+  const versiones = edVersiones();
+  if (!versiones.length) return edStatus("Marca al menos una versión.", "error");
+  const btn = $("ed-descargar-todas");
+  btn.disabled = true;
+  try {
+    const zip = new JSZip();
+    const usados = new Set();
+    let n = 0;
+    for (const item of items) {
+      const nombres = edNombresSalida(item);
+      for (const v of versiones) {
+        const ruta = edRutaUnica(usados, versiones.length > 1 ? `${ED_VERSIONES[v].carpeta}/${nombres[v]}` : nombres[v]);
+        zip.file(ruta, await edGenerarVersion(item, v));
+      }
+      n++;
+      edStatus(`Generando ${n}/${items.length}…`);
+    }
+    edStatus("Comprimiendo…");
+    const blob = await zip.generateAsync({ type: "blob" });
+    const nombreZip = `fotos_editadas_${new Date().toISOString().slice(0, 10)}.zip`;
+    downloadBlob(nombreZip, blob);
+    edStatus(`✓ ${nombreZip} · ${items.length} foto${items.length !== 1 ? "s" : ""} · ${usados.size} archivo${usados.size !== 1 ? "s" : ""}.`, "ok");
+    toast(`ZIP generado: ${nombreZip}`, "success");
+  } catch (e) {
+    edStatus(`Error: ${e.message}`, "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Posición del puntero en unidades del lienzo (ED_VIEW), relativa al centro.
+function edPos(e) {
+  const r = $("ed-canvas").getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) * ED_VIEW / r.width - ED_VIEW / 2,
+    y: (e.clientY - r.top) * ED_VIEW / r.height - ED_VIEW / 2
+  };
+}
+
+function edIniciarGesto(item) {
+  const pts = [...edPunteros.values()];
+  if (pts.length >= 2) {
+    const [a, b] = pts;
+    return { tipo: "pinza", ox: item.ox, oy: item.oy, zoom: item.zoom, dist: Math.hypot(b.x - a.x, b.y - a.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+  }
+  return { tipo: "mover", ox: item.ox, oy: item.oy, x: pts[0].x, y: pts[0].y };
+}
+
+function bindEditor() {
+  const drop = $("ed-dropzone");
+  const input = $("ed-archivos");
+  drop.onclick = () => input.click();
+  drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
+  input.onchange = (ev) => {
+    const files = [...(ev.target.files ?? [])];
+    ev.target.value = "";
+    edAgregarArchivos(files).catch((e) => toast(`No se pudieron cargar las imágenes: ${e.message}`, "error"));
+  };
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("ed-dropzone--over"); }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("ed-dropzone--over"); }));
+  drop.addEventListener("drop", (e) => {
+    edAgregarArchivos([...(e.dataTransfer?.files ?? [])]).catch((err) => toast(`No se pudieron cargar las imágenes: ${err.message}`, "error"));
+  });
+
+  const canvas = $("ed-canvas");
+  canvas.addEventListener("pointerdown", (e) => {
+    const item = edItemActual();
+    if (!item) return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    edPunteros.set(e.pointerId, edPos(e));
+    edGesto = edIniciarGesto(item);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!edPunteros.has(e.pointerId) || !edGesto) return;
+    const item = edItemActual();
+    if (!item) return;
+    edPunteros.set(e.pointerId, edPos(e));
+    const pts = [...edPunteros.values()];
+    if (edGesto.tipo === "mover" && pts.length === 1) {
+      item.ox = edGesto.ox + (pts[0].x - edGesto.x);
+      item.oy = edGesto.oy + (pts[0].y - edGesto.y);
+      edClamp(item);
+    } else if (edGesto.tipo === "pinza" && pts.length >= 2) {
+      const [a, b] = pts;
+      const dist = Math.hypot(b.x - a.x, b.y - a.y);
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      // Partir del estado inicial de la pinza: desplazar según el centro y
+      // hacer zoom alrededor de ese punto.
+      item.zoom = edGesto.zoom;
+      item.ox = edGesto.ox + (cx - edGesto.cx);
+      item.oy = edGesto.oy + (cy - edGesto.cy);
+      edSetZoom(item, edGesto.zoom * (dist / edGesto.dist), cx, cy);
+    }
+    edRender();
+  });
+  const soltar = (e) => {
+    edPunteros.delete(e.pointerId);
+    const item = edItemActual();
+    edGesto = edPunteros.size && item ? edIniciarGesto(item) : null;
+  };
+  canvas.addEventListener("pointerup", soltar);
+  canvas.addEventListener("pointercancel", soltar);
+  canvas.addEventListener("wheel", (e) => {
+    const item = edItemActual();
+    if (!item) return;
+    e.preventDefault();
+    const { x, y } = edPos(e);
+    edSetZoom(item, item.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), x, y);
+    edRender();
+  }, { passive: false });
+
+  $("ed-zoom").oninput = () => {
+    const item = edItemActual();
+    if (!item) return;
+    edSetZoom(item, Number($("ed-zoom").value));
+    edRender();
+  };
+  $("ed-rotar-izq").onclick = () => { const item = edItemActual(); if (item) edRotar(item, -90); };
+  $("ed-rotar-der").onclick = () => { const item = edItemActual(); if (item) edRotar(item, 90); };
+  $("ed-reset").onclick = () => {
+    const item = edItemActual();
+    if (!item) return;
+    item.zoom = 1; item.ox = 0; item.oy = 0;
+    edRender();
+  };
+  $("ed-doc").oninput = () => {
+    const item = edItemActual();
+    if (!item) return;
+    item.doc = $("ed-doc").value;
+    edActualizarItemLista(item);
+    edActualizarNombres();
+  };
+  $("ed-nombre").oninput = () => {
+    const item = edItemActual();
+    if (!item) return;
+    item.nombre = $("ed-nombre").value;
+    edActualizarItemLista(item);
+    edActualizarNombres();
+  };
+  Object.keys(ED_VERSIONES).forEach((v) => { $(`ed-v-${v}`).onchange = edActualizarNombres; });
+  $("ed-descargar-una").onclick = edDescargarUna;
+  $("ed-descargar-todas").onclick = edDescargarTodas;
+  $("ed-quitar").onclick = () => { if (state.editor.seleccion != null) edQuitar(state.editor.seleccion); };
+  $("ed-quitar-todas").onclick = edQuitarTodas;
+}
+
 function bindGestion() {
   document.querySelectorAll(".nav-btn").forEach((b) => { b.onclick = () => mostrarVista(b.dataset.vista); });
   window.addEventListener("hashchange", () => mostrarVista(location.hash.replace("#", "")));
@@ -2809,6 +3293,7 @@ function bindEvents() {
 (async function init() {
   bindEvents();
   bindGestion();
+  bindEditor();
   initHelp();
   mostrarVista(location.hash.replace("#", "") || "fotos");
 
